@@ -138,84 +138,243 @@ def get_all_verified_users():
     return [row[0] for row in rows]
 
 
-def render_result_page(guild_name, success=True, error_message=None):
+def render_result_page(guild_name, success=True, error_message=None, username=None):
     guild_display = guild_name if guild_name else "Discord Server"
 
     if success:
-        theme_color = "50,255,120"
-        accent = "#7dffb0"
-        title = "FINISH"
-        desc = "รับยศสำเร็จแล้ว"
-        sub = "กลับไปที่ Discord ได้เลย"
-        status_box = '<div class="statusbox">ROLE GRANTED</div>'
-        logo_icon = "OK"
+        # ===== หน้าสำเร็จ (แบบรูปที่ 2) =====
+        html_out = """<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>รับยศสำเร็จ</title>
+    <style>
+        * { margin:0; padding:0; box-sizing:border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, sans-serif;
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background: #0d1f0d;
+            padding: 20px;
+        }
+        .card {
+            background: #1a2e1a;
+            border-radius: 24px;
+            padding: 40px 30px 30px 30px;
+            max-width: 380px;
+            width: 100%;
+            text-align: center;
+            border: 1px solid #2a5a2a;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+        }
+        .logo {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            margin: 0 auto 16px;
+            background: radial-gradient(circle, rgba(50,255,120,0.15), #041505);
+            border: 2px solid #4ade80;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 32px;
+            font-weight: bold;
+            color: #4ade80;
+        }
+        .label {
+            color: #86ef86;
+            font-size: 13px;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            margin-bottom: 6px;
+            opacity: 0.9;
+        }
+        h1 {
+            color: #ffffff;
+            font-size: 26px;
+            font-weight: 700;
+            margin-bottom: 8px;
+        }
+        .username {
+            color: #f0fdf0;
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+        .badge {
+            display: inline-block;
+            background: rgba(34,197,94,0.2);
+            border: 1px solid rgba(34,197,94,0.3);
+            border-radius: 50px;
+            padding: 4px 18px;
+            color: #4ade80;
+            font-size: 13px;
+            font-weight: 600;
+            margin-bottom: 18px;
+        }
+        .message {
+            color: #a0d6a0;
+            font-size: 14px;
+            line-height: 1.6;
+            margin-bottom: 22px;
+            opacity: 0.85;
+        }
+        .btn {
+            display: inline-block;
+            width: 100%;
+            padding: 14px 20px;
+            border-radius: 50px;
+            text-decoration: none;
+            font-weight: 700;
+            font-size: 15px;
+            background: linear-gradient(135deg, #22c55e, #16a34a);
+            color: #ffffff;
+            box-shadow: 0 8px 30px rgba(34,197,94,0.25);
+            transition: all 0.3s ease;
+            border: none;
+            cursor: pointer;
+        }
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 12px 40px rgba(34,197,94,0.4);
+        }
+        .footer {
+            color: #4a7a4a;
+            font-size: 11px;
+            margin-top: 18px;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="logo">✅</div>
+        <div class="label">ยินดีต้อนรับสู่ """ + guild_display + """</div>
+        <h1>รับยศสำเร็จแล้ว</h1>
+        <div class="username">@""" + (username if username else "ผู้ใช้") + """</div>
+        <div class="badge">✅ Success Member</div>
+        <div class="message">ระบบได้ยืนยันตัวตนของคุณเรียบร้อยแล้ว<br>ตอนนี้คุณสามารถกลับเข้าสู่ Discord ได้ทันที</div>
+        <a href="https://discord.com/channels/@me" class="btn">Account Verified — กลับสู่ Discord</a>
+        <div class="footer">&copy; 2026 """ + guild_display + """<br>Powered by """ + BOT_BRAND_NAME + """</div>
+    </div>
+</body>
+</html>"""
+        return html_out
+
     else:
-        theme_color = "255,70,70"
-        accent = "#ff8a8a"
-        title = "Verify Failed"
-        desc = error_message or "เกิดข้อผิดพลาดบางอย่าง"
-        sub = "กรุณาลองใหม่อีกครั้ง"
-        status_box = '<div class="statusbox">UNKNOWN_ERROR</div>'
-        logo_icon = "X"
-
-    html_out = "<!DOCTYPE html>"
-    html_out += "<html lang='th'><head>"
-    html_out += "<meta charset='UTF-8'>"
-    html_out += "<meta name='viewport' content='width=device-width, initial-scale=1.0'>"
-    html_out += "<title>" + title + "</title>"
-    html_out += "<style>"
-    html_out += "* { box-sizing: border-box; }"
-    html_out += "html, body { margin: 0; height: 100%; overflow: hidden; }"
-    html_out += "body { display: flex; align-items: center; justify-content: center; min-height: 100vh; font-family: 'Segoe UI', sans-serif; background-image: url('" + BACKGROUND_IMAGE_URL + "'); background-size: cover; background-position: center; padding: 20px; position: relative; }"
-    html_out += "body::before { content: ''; position: fixed; inset: 0; background: rgba(0,0,0,0.55); z-index: 0; }"
-    html_out += ".card { background: rgba(8, 15, 12, 0.88); border: 1px solid rgba(" + theme_color + ",0.25); border-radius: 20px; padding: 36px 28px; text-align: center; max-width: 360px; width: 100%; box-shadow: 0 0 50px rgba(" + theme_color + ",0.15), 0 8px 24px rgba(0,0,0,0.6); position: relative; z-index: 10; }"
-    html_out += ".logo { width: 90px; height: 90px; border-radius: 50%; margin: 0 auto 16px; background: radial-gradient(circle, rgba(" + theme_color + ",0.15), #041505); border: 2px solid rgba(" + theme_color + ",0.5); box-shadow: 0 0 25px rgba(" + theme_color + ",0.4); display: flex; align-items: center; justify-content: center; font-size: 26px; font-weight: bold; color: " + accent + "; }"
-    html_out += ".label { color: " + accent + "; font-size: 12px; letter-spacing: 2px; margin-bottom: 6px; opacity: 0.85; }"
-    html_out += "h1 { color: #fff; font-size: 28px; margin: 0 0 14px; letter-spacing: 1px; }"
-    html_out += ".desc { color: " + accent + "; font-weight: 600; font-size: 15px; margin-bottom: 4px; }"
-    html_out += ".sub { color: #999; font-size: 13px; margin-bottom: 20px; }"
-    html_out += ".statusbox { background: rgba(" + theme_color + ",0.08); border: 1px solid rgba(" + theme_color + ",0.35); color: " + accent + "; font-weight: bold; letter-spacing: 1px; border-radius: 10px; padding: 12px; margin-bottom: 22px; font-size: 14px; }"
-    html_out += ".socials { display: flex; justify-content: center; gap: 14px; margin-bottom: 18px; }"
-    html_out += ".socials a { width: 40px; height: 40px; border-radius: 50%; background: rgba(255,255,255,0.07); display: flex; align-items: center; justify-content: center; text-decoration: none; }"
-    html_out += ".socials svg { width: 18px; height: 18px; fill: #e5e5e5; }"
-    html_out += ".footer { color: #aaa; font-size: 11px; line-height: 1.6; }"
-    html_out += ".snow { position: fixed; top: -10px; color: white; user-select: none; pointer-events: none; z-index: 1; animation-name: fall, sway; animation-timing-function: linear, ease-in-out; animation-iteration-count: infinite; }"
-    html_out += "@keyframes fall { to { transform: translateY(110vh); } }"
-    html_out += "@keyframes sway { 0%, 100% { margin-left: 0; } 50% { margin-left: 40px; } }"
-    html_out += "</style></head><body>"
-    html_out += "<div class='card'>"
-    html_out += "<div class='logo'>" + logo_icon + "</div>"
-    html_out += "<div class='label'>SERVER VERIFY</div>"
-    html_out += "<h1>" + title + "</h1>"
-    html_out += "<div class='desc'>" + desc + "</div>"
-    html_out += "<div class='sub'>" + sub + "</div>"
-    html_out += status_box
-    html_out += "<div class='socials'>"
-    html_out += "<a href='" + SOCIAL_LINKS["discord"] + "' target='_blank' title='Discord'><svg viewBox='0 0 24 24'><path d='M12 2C6.48 2 2 6.48 2 12c0 3.54 1.84 6.65 4.62 8.44-.15-.71-.28-1.8.06-2.58.31-.71 2-8.5 2-8.5s-.51-1.02-.51-2.53c0-2.37 1.37-4.14 3.08-4.14 1.45 0 2.15 1.09 2.15 2.39 0 1.46-.93 3.64-1.41 5.66-.4 1.7.85 3.08 2.52 3.08 3.02 0 5.06-3.88 5.06-8.46 0-3.49-2.35-6.1-6.62-6.1-4.82 0-7.83 3.6-7.83 7.62 0 1.39.41 2.37 1.05 3.13.29.35.33.49.23.89-.08.31-.26 1.02-.33 1.3-.11.42-.44.57-.81.42-2.26-.92-3.31-3.4-3.31-6.19C6 8.16 9.36 4.9 15.24 4.9c5 0 8.36 3.62 8.36 7.5 0 5.13-2.85 8.96-7.08 8.96-1.42 0-2.75-.77-3.21-1.63l-.87 3.32c-.26 1-.77 2-1.22 2.68.92.28 1.9.43 2.91.43 5.52 0 10-4.48 10-10S17.52 2 12 2z'/></svg></a>"
-    html_out += "<a href='" + SOCIAL_LINKS["instagram"] + "' target='_blank' title='Instagram'><svg viewBox='0 0 24 24'><path d='M12 2.16c3.2 0 3.58.01 4.85.07 1.17.05 1.8.25 2.23.41.56.22.96.48 1.38.9.42.42.68.82.9 1.38.16.42.36 1.06.41 2.23.06 1.27.07 1.65.07 4.85s-.01 3.58-.07 4.85c-.05 1.17-.25 1.8-.41 2.23-.22.56-.48.96-.9 1.38-.42.42-.82.68-1.38.9-.42.16-1.06.36-2.23.41-1.27.06-1.65.07-4.85.07s-3.58-.01-4.85-.07c-1.17-.05-1.8-.25-2.23-.41-.56-.22-.96-.48-1.38-.9-.42-.42-.68-.82-.9-1.38-.16-.42-.36-1.06-.41-2.23-.06-1.27-.07-1.65-.07-4.85s.01-3.58.07-4.85c.05-1.17.25-1.8.41-2.23.22-.56.48-.96.9-1.38.42-.42.82-.68 1.38-.9.42-.16 1.06-.36 2.23-.41 1.27-.06 1.65-.07 4.85-.07M12 0C8.74 0 8.33.01 7.05.07 5.78.13 4.9.33 4.14.63c-.79.31-1.46.72-2.13 1.38C1.35 2.68.94 3.35.63 4.14c-.3.76-.5 1.64-.56 2.91C.01 8.33 0 8.74 0 12s.01 3.67.07 4.95c.06 1.27.26 2.15.56 2.91.31.79.72 1.46 1.38 2.13.67.66 1.34 1.07 2.13 1.38.76.3 1.64.5 2.91.56C8.33 23.99 8.74 24 12 24s3.67-.01 4.95-.07c1.27-.06 2.15-.26 2.91-.56.79-.31 1.46-.72 2.13-1.38.66-.67 1.07-1.34 1.38-2.13.3-.76.5-1.64.56-2.91.06-1.28.07-1.69.07-4.95s-.01-3.67-.07-4.95c-.06-1.27-.26-2.15-.56-2.91-.31-.79-.72-1.46-1.38-2.13C21.32 1.35 20.65.94 19.86.63c-.76-.3-1.64-.5-2.91-.56C15.67.01 15.26 0 12 0zm0 5.84A6.16 6.16 0 1 0 18.16 12 6.16 6.16 0 0 0 12 5.84zm0 10.16A4 4 0 1 1 16 12a4 4 0 0 1-4 4zm6.41-10.4a1.44 1.44 0 1 1-1.44-1.44 1.44 1.44 0 0 1 1.44 1.44z'/></svg></a>"
-    html_out += "<a href='" + SOCIAL_LINKS["youtube"] + "' target='_blank' title='YouTube'><svg viewBox='0 0 24 24'><path d='M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l7 4.5-7 4.5z'/></svg></a>"
-    html_out += "<a href='" + SOCIAL_LINKS["website"] + "' target='_blank' title='Website'><svg viewBox='0 0 24 24'><path d='M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm7.94 9h-3.05a15.6 15.6 0 0 0-1.14-5.32A8 8 0 0 1 19.94 11zM12 4.06c.94 1.24 1.99 3.33 2.28 6.94H9.72c.29-3.61 1.34-5.7 2.28-6.94zM9.72 13h4.56c-.29 3.61-1.34 5.7-2.28 6.94-.94-1.24-1.99-3.33-2.28-6.94zM8.25 5.68A15.6 15.6 0 0 0 7.11 11H4.06a8 8 0 0 1 4.19-5.32zM4.06 13h3.05a15.6 15.6 0 0 0 1.14 5.32A8 8 0 0 1 4.06 13zm11.69 5.32A15.6 15.6 0 0 0 16.89 13h3.05a8 8 0 0 1-4.19 5.32z'/></svg></a>"
-    html_out += "</div>"
-    html_out += "<div class='footer'>&copy; 2026 " + guild_display + "<br>Powered by " + BOT_BRAND_NAME + "</div>"
-    html_out += "</div>"
-    html_out += "<script>"
-    html_out += "var snowflakeCount = 35; var body = document.body;"
-    html_out += "for (var i = 0; i < snowflakeCount; i++) {"
-    html_out += "  var flake = document.createElement('div');"
-    html_out += "  flake.className = 'snow'; flake.textContent = '*';"
-    html_out += "  flake.style.left = Math.random() * 100 + 'vw';"
-    html_out += "  flake.style.fontSize = (Math.random() * 14 + 10) + 'px';"
-    html_out += "  flake.style.opacity = Math.random() * 0.6 + 0.4;"
-    html_out += "  var fallDuration = Math.random() * 6 + 5;"
-    html_out += "  var swayDuration = Math.random() * 3 + 2;"
-    html_out += "  var delay = Math.random() * 5;"
-    html_out += "  flake.style.animationDuration = fallDuration + 's, ' + swayDuration + 's';"
-    html_out += "  flake.style.animationDelay = delay + 's, ' + delay + 's';"
-    html_out += "  body.appendChild(flake);"
-    html_out += "}"
-    html_out += "</script></body></html>"
-
-    return html_out
+        # ===== หน้าผิดพลาด =====
+        html_out = """<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Verify Failed</title>
+    <style>
+        * { margin:0; padding:0; box-sizing:border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, sans-serif;
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background: #1a0d0d;
+            padding: 20px;
+        }
+        .card {
+            background: #2e1a1a;
+            border-radius: 24px;
+            padding: 40px 30px 30px 30px;
+            max-width: 380px;
+            width: 100%;
+            text-align: center;
+            border: 1px solid #5a2a2a;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+        }
+        .logo {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            margin: 0 auto 16px;
+            background: radial-gradient(circle, rgba(255,70,70,0.15), #1a0505);
+            border: 2px solid #ef4444;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 32px;
+            font-weight: bold;
+            color: #ef4444;
+        }
+        .label {
+            color: #ef8686;
+            font-size: 13px;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            margin-bottom: 6px;
+            opacity: 0.9;
+        }
+        h1 {
+            color: #ffffff;
+            font-size: 26px;
+            font-weight: 700;
+            margin-bottom: 8px;
+        }
+        .desc {
+            color: #ef8686;
+            font-size: 15px;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+        .sub {
+            color: #d6a0a0;
+            font-size: 14px;
+            margin-bottom: 20px;
+            opacity: 0.85;
+        }
+        .btn {
+            display: inline-block;
+            width: 100%;
+            padding: 14px 20px;
+            border-radius: 50px;
+            text-decoration: none;
+            font-weight: 700;
+            font-size: 15px;
+            background: linear-gradient(135deg, #ef4444, #dc2626);
+            color: #ffffff;
+            box-shadow: 0 8px 30px rgba(239,68,68,0.25);
+            transition: all 0.3s ease;
+            border: none;
+            cursor: pointer;
+        }
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 12px 40px rgba(239,68,68,0.4);
+        }
+        .footer {
+            color: #7a4a4a;
+            font-size: 11px;
+            margin-top: 18px;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="logo">❌</div>
+        <div class="label">SERVER VERIFY</div>
+        <h1>Verify Failed</h1>
+        <div class="desc">""" + (error_message if error_message else "เกิดข้อผิดพลาด") + """</div>
+        <div class="sub">กรุณาลองใหม่อีกครั้ง</div>
+        <a href="/" class="btn">🔄 ลองใหม่</a>
+        <div class="footer">&copy; 2026 """ + guild_display + """<br>Powered by """ + BOT_BRAND_NAME + """</div>
+    </div>
+</body>
+</html>"""
+        return html_out
 
 
 app = Flask(__name__)
@@ -276,18 +435,20 @@ def callback():
         "https://discord.com/api/users/@me",
         headers={"Authorization": f"Bearer {access_token}"},
     )
-    user_id = user_res.json()["id"]
+    user_data = user_res.json()
+    user_id = user_data["id"]
+    username = user_data.get("username", "ผู้ใช้")
 
     save_user_token(user_id, access_token, refresh_token, expires_in)
 
     if guild_id:
         success, message = join_user_to_guild(user_id, guild_id, role_id)
         if success:
-            return render_result_page(guild_name, success=True)
+            return render_result_page(guild_name, success=True, username=username)
         else:
-            return render_result_page(guild_name, success=False, error_message="ไม่สามารถแจกยศได้")
+            return render_result_page(guild_name, success=False, error_message="ไม่สามารถแจกยศได้", username=username)
 
-    return render_result_page(guild_name, success=True)
+    return render_result_page(guild_name, success=True, username=username)
 
 
 @app.errorhandler(429)
