@@ -140,10 +140,9 @@ def get_all_verified_users():
 
 def render_result_page(guild_name, success=True, error_message=None, username=None, guild_icon_url=None, user_avatar_url=None):
     guild_display = guild_name if guild_name else "Discord Server"
-    icon_url = guild_icon_url or "https://cdn.discordapp.com/embed/avatars/0.png"
-    avatar_url = user_avatar_url or "https://cdn.discordapp.com/embed/avatars/0.png"
 
     if success:
+        # ===== หน้าสำเร็จ (เหมือน IMG_3731 ทุกประการ) =====
         html_out = f"""<!DOCTYPE html>
 <html lang="th">
 <head>
@@ -171,21 +170,26 @@ def render_result_page(guild_name, success=True, error_message=None, username=No
             border: 1px solid #2a5a2a;
             box-shadow: 0 20px 60px rgba(0,0,0,0.6);
         }}
-        .guild-icon {{
+        .logo {{
             width: 80px;
             height: 80px;
             border-radius: 50%;
-            margin: 0 auto 12px;
+            margin: 0 auto 16px;
+            background: radial-gradient(circle, rgba(50,255,120,0.15), #041505);
             border: 2px solid #4ade80;
-            object-fit: cover;
-            display: block;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 32px;
+            font-weight: bold;
+            color: #4ade80;
         }}
         .label {{
             color: #86ef86;
             font-size: 13px;
             letter-spacing: 2px;
             text-transform: uppercase;
-            margin-bottom: 4px;
+            margin-bottom: 6px;
             opacity: 0.9;
         }}
         h1 {{
@@ -198,34 +202,14 @@ def render_result_page(guild_name, success=True, error_message=None, username=No
             color: #86ef86;
             font-size: 15px;
             font-weight: 400;
-            margin-bottom: 12px;
-            opacity: 0.85;
-        }}
-        .user-block {{
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 12px;
-            background: rgba(255,255,255,0.03);
-            border: 1px solid rgba(74,222,128,0.12);
-            border-radius: 50px;
-            padding: 6px 20px 6px 8px;
             margin-bottom: 16px;
-            width: fit-content;
-            margin-left: auto;
-            margin-right: auto;
-        }}
-        .user-avatar {{
-            width: 44px;
-            height: 44px;
-            border-radius: 50%;
-            border: 2px solid #4ade80;
-            object-fit: cover;
+            opacity: 0.85;
         }}
         .username {{
             color: #f0fdf0;
-            font-size: 18px;
+            font-size: 20px;
             font-weight: 600;
+            margin-bottom: 4px;
         }}
         .badge {{
             display: inline-block;
@@ -245,7 +229,12 @@ def render_result_page(guild_name, success=True, error_message=None, username=No
             margin-bottom: 22px;
             opacity: 0.85;
         }}
-        .btn {{
+        .btn-group {{
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }}
+        .btn-primary {{
             display: inline-block;
             width: 100%;
             padding: 14px 20px;
@@ -260,9 +249,27 @@ def render_result_page(guild_name, success=True, error_message=None, username=No
             border: none;
             cursor: pointer;
         }}
-        .btn:hover {{
+        .btn-primary:hover {{
             transform: translateY(-2px);
             box-shadow: 0 12px 40px rgba(34,197,94,0.4);
+        }}
+        .btn-secondary {{
+            display: inline-block;
+            width: 100%;
+            padding: 14px 20px;
+            border-radius: 50px;
+            text-decoration: none;
+            font-weight: 700;
+            font-size: 15px;
+            background: transparent;
+            border: 1px solid #2a5a2a;
+            color: #a0d6a0;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }}
+        .btn-secondary:hover {{
+            background: rgba(34,197,94,0.1);
+            transform: translateY(-2px);
         }}
         .footer {{
             color: #4a7a4a;
@@ -275,23 +282,24 @@ def render_result_page(guild_name, success=True, error_message=None, username=No
 </head>
 <body>
     <div class="card">
-        <img class="guild-icon" src="{icon_url}" alt="Server Icon">
-        <div class="label">ยินดีต้อนรับสู่ {guild_display}</div>
+        <div class="logo">✅</div>
+        <div class="label">SERVER VERIFY</div>
         <h1>Verify Success</h1>
         <div class="sub-title">ยืนยันตัวตนสำเร็จ</div>
-        <div class="user-block">
-            <img class="user-avatar" src="{avatar_url}" alt="User Avatar">
-            <span class="username">@{username if username else 'ผู้ใช้'}</span>
-        </div>
-        <div class="badge">✅ Success Member</div>
+        <div class="username">{(username if username else 'ผู้ใช้')}</div>
+        <div class="badge">Success Member</div>
         <div class="message">ระบบได้ยืนยันตัวตนของคุณเรียบร้อยแล้ว<br>ตอนนี้คุณสามารถกลับเข้าสู่ Discord ได้ทันที</div>
-        <a href="https://discord.com/channels/@me" class="btn">Account Verified — กลับสู่ Discord</a>
+        <div class="btn-group">
+            <a href="https://discord.com/channels/@me" class="btn-primary">Account Verified</a>
+            <a href="https://discord.com/channels/@me" class="btn-secondary">กลับสู่ Discord</a>
+        </div>
         <div class="footer">&copy; 2026 {guild_display}<br>Powered by {BOT_BRAND_NAME}</div>
     </div>
 </body>
 </html>"""
         return html_out
     else:
+        # ===== หน้าผิดพลาด =====
         html_out = f"""<!DOCTYPE html>
 <html lang="th">
 <head>
@@ -463,52 +471,17 @@ def callback():
     user_data = user_res.json()
     user_id = user_data["id"]
     username = user_data.get("username", "ผู้ใช้")
-    user_avatar_hash = user_data.get("avatar")
-    user_avatar_url = f"https://cdn.discordapp.com/avatars/{user_id}/{user_avatar_hash}.png" if user_avatar_hash else "https://cdn.discordapp.com/embed/avatars/0.png"
 
     save_user_token(user_id, access_token, refresh_token, expires_in)
-
-    # ดึงข้อมูลเซิร์ฟเวอร์ (guild icon)
-    guild_icon_url = None
-    if guild_id:
-        # ดึงข้อมูลเซิร์ฟจาก Discord API
-        guild_info = requests.get(
-            f"https://discord.com/api/guilds/{guild_id}",
-            headers={"Authorization": f"Bot {BOT_TOKEN}"}
-        )
-        if guild_info.status_code == 200:
-            guild_data = guild_info.json()
-            icon_hash = guild_data.get("icon")
-            if icon_hash:
-                guild_icon_url = f"https://cdn.discordapp.com/icons/{guild_id}/{icon_hash}.png"
 
     if guild_id:
         success, message = join_user_to_guild(user_id, guild_id, role_id)
         if success:
-            return render_result_page(
-                guild_name,
-                success=True,
-                username=username,
-                guild_icon_url=guild_icon_url,
-                user_avatar_url=user_avatar_url
-            )
+            return render_result_page(guild_name, success=True, username=username)
         else:
-            return render_result_page(
-                guild_name,
-                success=False,
-                error_message="ไม่สามารถแจกยศได้",
-                username=username,
-                guild_icon_url=guild_icon_url,
-                user_avatar_url=user_avatar_url
-            )
+            return render_result_page(guild_name, success=False, error_message="ไม่สามารถแจกยศได้")
 
-    return render_result_page(
-        guild_name,
-        success=True,
-        username=username,
-        guild_icon_url=guild_icon_url,
-        user_avatar_url=user_avatar_url
-    )
+    return render_result_page(guild_name, success=True, username=username)
 
 
 @app.errorhandler(429)
