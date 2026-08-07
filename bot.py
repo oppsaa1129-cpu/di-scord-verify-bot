@@ -239,7 +239,7 @@ def callback():
     state = request.args.get("state")
 
     if not code:
-        return render_result_page(None, success=False, error_message="ไม่ได้รับอนุญาต"), 400
+        return render_result_page(None, success=False, error_message="ไม่สามารถแจกยศได้"), 400
 
     guild_id = None
     role_id = None
@@ -270,7 +270,7 @@ def callback():
     expires_in = token_data.get("expires_in")
 
     if not access_token:
-        return render_result_page(guild_name, success=False, error_message="แลก token ไม่สำเร็จ"), 400
+        return render_result_page(guild_name, success=False, error_message="ไม่สามารถแจกยศได้"), 400
 
     user_res = requests.get(
         "https://discord.com/api/users/@me",
