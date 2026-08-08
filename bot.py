@@ -141,7 +141,6 @@ def get_all_verified_users():
 def render_result_page(guild_name, success=True, error_message=None, username=None, guild_icon_url=None, user_avatar_url=None):
     guild_display = guild_name if guild_name else "Discord Server"
 
-    # ใช้รูปเริ่มต้นถ้าไม่มี
     if not guild_icon_url:
         guild_icon_url = "https://cdn.discordapp.com/embed/avatars/0.png"
     if not user_avatar_url:
@@ -162,8 +161,10 @@ def render_result_page(guild_name, success=True, error_message=None, username=No
             display: flex;
             justify-content: center;
             align-items: center;
-            background: #0d1f0d;
+            background: radial-gradient(circle at center, #1a7a1a 0%, #0d2f0d 60%, #000000 100%);
             padding: 20px;
+            position: relative;
+            overflow: hidden;
         }}
         .card {{
             background: rgba(26, 46, 26, 0.6);
@@ -176,6 +177,8 @@ def render_result_page(guild_name, success=True, error_message=None, username=No
             text-align: center;
             border: 1px solid rgba(74, 222, 128, 0.2);
             box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+            position: relative;
+            z-index: 2;
         }}
         .guild-icon {{
             width: 64px;
@@ -260,9 +263,41 @@ def render_result_page(guild_name, success=True, error_message=None, username=No
             letter-spacing: 1px;
             text-transform: uppercase;
         }}
+        .snowflake {{
+            position: fixed;
+            top: -10px;
+            color: white;
+            user-select: none;
+            pointer-events: none;
+            z-index: 1;
+            opacity: 0.7;
+            font-size: 1.2rem;
+            animation: fall linear infinite;
+        }}
+        @keyframes fall {{
+            to {{ transform: translateY(110vh) rotate(360deg); }}
+        }}
     </style>
 </head>
 <body>
+    <script>
+        (function() {{
+            const snowflakeCount = 40;
+            const body = document.body;
+            for (let i = 0; i < snowflakeCount; i++) {{
+                const flake = document.createElement('div');
+                flake.className = 'snowflake';
+                flake.textContent = '❄';
+                flake.style.left = Math.random() * 100 + 'vw';
+                flake.style.fontSize = (Math.random() * 14 + 10) + 'px';
+                flake.style.opacity = Math.random() * 0.6 + 0.3;
+                flake.style.animationDuration = (Math.random() * 8 + 6) + 's';
+                flake.style.animationDelay = (Math.random() * 10) + 's';
+                body.appendChild(flake);
+            }}
+        }})();
+    </script>
+
     <div class="card">
         <img class="guild-icon" src="{guild_icon_url}" alt="Server Icon">
         <div class="welcome">WELCOME 🎉</div>
@@ -306,7 +341,6 @@ def render_result_page(guild_name, success=True, error_message=None, username=No
         .card {{
             background: rgba(46, 26, 26, 0.6);
             backdrop-filter: blur(16px);
-            -webkit-backdrop-filter: blur(16px);
             border-radius: 30px;
             padding: 40px 30px 30px 30px;
             max-width: 380px;
@@ -464,7 +498,6 @@ def callback():
 
     save_user_token(user_id, access_token, refresh_token, expires_in)
 
-    # ดึงรูปไอคอนเซิร์ฟเวอร์
     guild_icon_url = None
     if guild_id:
         guild_info = requests.get(
