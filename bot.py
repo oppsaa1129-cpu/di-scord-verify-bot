@@ -269,9 +269,9 @@ def render_result_page(guild_name, success=True, error_message=None, username=No
             color: white;
             user-select: none;
             pointer-events: none;
-            z-index: 1;
-            opacity: 0.7;
-            font-size: 1.2rem;
+            z-index: 99;
+            opacity: 0.8;
+            font-size: 1.4rem;
             animation: fall linear infinite;
         }}
         @keyframes fall {{
@@ -282,17 +282,17 @@ def render_result_page(guild_name, success=True, error_message=None, username=No
 <body>
     <script>
         (function() {{
-            const snowflakeCount = 40;
+            const snowflakeCount = 80;
             const body = document.body;
             for (let i = 0; i < snowflakeCount; i++) {{
                 const flake = document.createElement('div');
                 flake.className = 'snowflake';
                 flake.textContent = '❄';
                 flake.style.left = Math.random() * 100 + 'vw';
-                flake.style.fontSize = (Math.random() * 14 + 10) + 'px';
-                flake.style.opacity = Math.random() * 0.6 + 0.3;
-                flake.style.animationDuration = (Math.random() * 8 + 6) + 's';
-                flake.style.animationDelay = (Math.random() * 10) + 's';
+                flake.style.fontSize = (Math.random() * 16 + 10) + 'px';
+                flake.style.opacity = Math.random() * 0.7 + 0.3;
+                flake.style.animationDuration = (Math.random() * 10 + 6) + 's';
+                flake.style.animationDelay = (Math.random() * 12) + 's';
                 body.appendChild(flake);
             }}
         }})();
@@ -424,7 +424,7 @@ def render_result_page(guild_name, success=True, error_message=None, username=No
         <h1>Verify Failed</h1>
         <div class="desc">{error_message if error_message else 'เกิดข้อผิดพลาด'}</div>
         <div class="sub">กรุณาลองใหม่อีกครั้ง</div>
-        <a href="/" class="btn">🔄 ลองใหม่</a>
+        <a href="https://discord.com/channels/@me" class="btn">กลับสู่ Discord</a>
         <div class="footer">&copy; 2026 {guild_display}<br>Powered by {BOT_BRAND_NAME}</div>
     </div>
 </body>
