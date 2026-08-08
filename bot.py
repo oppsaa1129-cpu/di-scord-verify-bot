@@ -205,17 +205,19 @@ def render_result_page(guild_name, success=True, error_message=None, username=No
             background: rgba(255,255,255,0.05);
             backdrop-filter: blur(8px);
             -webkit-backdrop-filter: blur(8px);
-            border-radius: 60px;
-            padding: 8px 20px 8px 8px;
+            border-radius: 24px;
+            padding: 16px 20px 14px 20px;
             display: inline-flex;
+            flex-direction: column;
             align-items: center;
-            gap: 12px;
+            gap: 6px;
             border: 1px solid rgba(74,222,128,0.15);
             margin-bottom: 16px;
+            min-width: 150px;
         }}
         .user-avatar {{
-            width: 44px;
-            height: 44px;
+            width: 70px;
+            height: 70px;
             border-radius: 50%;
             border: 2px solid #4ade80;
             object-fit: cover;
@@ -263,7 +265,7 @@ def render_result_page(guild_name, success=True, error_message=None, username=No
 <body>
     <div class="card">
         <img class="guild-icon" src="{guild_icon_url}" alt="Server Icon">
-        <div class="welcome">WELCOME</div>
+        <div class="welcome">WELCOME 🎉</div>
         <h1>ยืนยันตัวตนสำเร็จแล้ว</h1>
 
         <div class="user-box">
