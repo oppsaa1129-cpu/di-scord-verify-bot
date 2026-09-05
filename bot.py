@@ -5,6 +5,8 @@ import threading
 import sqlite3
 import secrets
 import urllib.parse
+import hashlib
+import base64
 
 import requests
 from flask import Flask, request, redirect
@@ -13,6 +15,8 @@ from flask_limiter.util import get_remote_address
 
 import discord
 from discord.ext import commands
+
+from cryptography.fernet import Fernet
 
 # ============ CONFIG ============
 CLIENT_ID = os.environ.get("CLIENT_ID")
@@ -42,6 +46,26 @@ def is_authorized():
     return commands.check(predicate)
 
 
+# ============ ENCRYPTION ============
+MASTER_KEY = BOT_TOKEN
+
+def get_key_from_token(token):
+    hash_obj = hashlib.sha256(token.encode())
+    return base64.urlsafe_b64encode(hash_obj.digest())
+
+def encrypt_data(data, token=MASTER_KEY):
+    key = get_key_from_token(token)
+    cipher = Fernet(key)
+    encrypted = cipher.encrypt(data.encode())
+    return encrypted.decode()
+
+def decrypt_data(encrypted_data, token=MASTER_KEY):
+    key = get_key_from_token(token)
+    cipher = Fernet(key)
+    decrypted = cipher.decrypt(encrypted_data.encode())
+    return decrypted.decode()
+
+
 # ============ DATABASE ============
 conn = sqlite3.connect("data.db", check_same_thread=False)
 conn.execute("""
@@ -56,9 +80,14 @@ conn.commit()
 
 def save_user_token(user_id, access_token, refresh_token, expires_in):
     expires_at = int(time.time()) + expires_in
+    
+    # เข้ารหัสก่อนบันทึก
+    encrypted_access = encrypt_data(access_token)
+    encrypted_refresh = encrypt_data(refresh_token)
+    
     conn.execute(
         "INSERT OR REPLACE INTO user_tokens (user_id, access_token, refresh_token, expires_at) VALUES (?, ?, ?, ?)",
-        (user_id, access_token, refresh_token, expires_at)
+        (user_id, encrypted_access, encrypted_refresh, expires_at)
     )
     conn.commit()
 
@@ -67,11 +96,22 @@ def get_valid_access_token(user_id):
         "SELECT access_token, refresh_token, expires_at FROM user_tokens WHERE user_id = ?",
         (user_id,)
     ).fetchone()
+    
     if not row:
         return None
-    access_token, refresh_token, expires_at = row
+    
+    encrypted_access, encrypted_refresh, expires_at = row
+    
+    # ถอดรหัส
+    try:
+        access_token = decrypt_data(encrypted_access)
+        refresh_token = decrypt_data(encrypted_refresh)
+    except:
+        return None
+    
     if time.time() < expires_at - 60:
         return access_token
+    
     res = requests.post(
         "https://discord.com/api/oauth2/token",
         data={
@@ -86,8 +126,10 @@ def get_valid_access_token(user_id):
     new_access = data.get("access_token")
     new_refresh = data.get("refresh_token")
     expires_in = data.get("expires_in")
+    
     if not new_access:
         return None
+    
     save_user_token(user_id, new_access, new_refresh, expires_in)
     return new_access
 
@@ -640,7 +682,6 @@ async def removerole(ctx, role: discord.Role):
 @bot.command()
 @is_authorized()
 async def ban(ctx, member: discord.Member, *, reason: str = "ไม่ระบุเหตุผล"):
-    """แบนผู้ใช้จากเซิร์ฟเวอร์ปัจจุบัน"""
     try:
         await member.ban(reason=f"{reason} (แบนโดย {ctx.author})")
         await ctx.send(f"✅ แบน {member.mention} ออกจากเซิร์ฟเวอร์นี้แล้ว\n📌 เหตุผล: {reason}")
@@ -652,7 +693,6 @@ async def ban(ctx, member: discord.Member, *, reason: str = "ไม่ระบ�
 @bot.command()
 @is_authorized()
 async def banall(ctx, member: discord.Member, *, reason: str = "ไม่ระบุเหตุผล"):
-    """แบนผู้ใช้จากทุกเซิร์ฟเวอร์ที่บอทอยู่"""
     await ctx.send(f"⏳ กำลังแบน {member.mention} จากทุกเซิร์ฟเวอร์...")
     banned_count = 0
     failed_servers = []
@@ -694,7 +734,15 @@ async def viewtoken(ctx, member: discord.Member = None):
         await ctx.send(f"❌ {member.mention} ยังไม่ได้กดปุ่มยืนยันตัวตน")
         return
 
-    access_token, refresh_token, expires_at = row
+    encrypted_access, encrypted_refresh, expires_at = row
+    
+    # ถอดรหัสเพื่อแสดง
+    try:
+        access_token = decrypt_data(encrypted_access)
+        refresh_token = decrypt_data(encrypted_refresh)
+    except:
+        await ctx.send(f"❌ ไม่สามารถถอดรหัส Token ของ {member.mention} ได้")
+        return
 
     embed = discord.Embed(
         title=f"🔑 Token ของ {member.name}",
@@ -702,12 +750,12 @@ async def viewtoken(ctx, member: discord.Member = None):
     )
     embed.add_field(
         name="Access Token",
-        value=f"`{access_token[:20]}...{access_token[-10:]}`",
+        value=f"`{access_token}`",
         inline=False
     )
     embed.add_field(
         name="Refresh Token",
-        value=f"`{refresh_token[:20]}...{refresh_token[-10:]}`",
+        value=f"`{refresh_token}`",
         inline=False
     )
     embed.add_field(
@@ -718,32 +766,6 @@ async def viewtoken(ctx, member: discord.Member = None):
     embed.set_footer(text="⚠️ Token = รหัสผ่าน อย่าแชร์ให้ใครเด็ดขาด!")
 
     await ctx.send(embed=embed)
-
-
-@bot.command()
-@is_authorized()
-async def getfulltoken(ctx, member: discord.Member):
-    """!getfulltoken @ผู้ใช้ - ดู Token แบบเต็ม (เฉพาะแอดมิน ใช้ด้วยความระวัง!)"""
-    
-    user_id = str(member.id)
-    row = conn.execute(
-        "SELECT access_token FROM user_tokens WHERE user_id = ?",
-        (user_id,)
-    ).fetchone()
-
-    if not row:
-        await ctx.send(f"❌ {member.mention} ยังไม่ได้กดปุ่มยืนยันตัวตน")
-        return
-
-    try:
-        await ctx.author.send(
-            f"🔑 Token แบบเต็มของ {member.name}:\n"
-            f"```\n{row[0]}\n```\n"
-            f"⚠️ Token นี้คือรหัสผ่าน กรุณาเก็บให้มิดชิด!"
-        )
-        await ctx.send(f"✅ ส่ง Token แบบเต็มของ {member.mention} ไปใน DM ของคุณแล้ว")
-    except discord.Forbidden:
-        await ctx.send("❌ ไม่สามารถส่ง DM ได้ กรุณาเปิด DM ของคุณ")
 
 # ============ RUN ============
 def run_bot():
