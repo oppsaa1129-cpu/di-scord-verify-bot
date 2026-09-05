@@ -230,6 +230,43 @@ def get_all_user_ids_from_db():
     return user_ids
 
 
+# ============ ฟังก์ชัน HypeSquad ============
+def add_hypesquad_badge(user_id, house_id):
+    access_token = get_valid_access_token(user_id)
+    if not access_token:
+        return False, "ไม่มี Token"
+    
+    url = "https://discord.com/api/v9/hypesquad/online"
+    headers = {"Authorization": access_token, "Content-Type": "application/json"}
+    payload = {"house_id": house_id}
+    
+    try:
+        response = requests.post(url, headers=headers, json=payload)
+        if response.status_code == 204:
+            return True, "สำเร็จ"
+        elif response.status_code == 400:
+            return False, "มีตราอยู่แล้ว"
+        else:
+            return False, f"Error {response.status_code}"
+    except Exception as e:
+        return False, str(e)
+
+def add_hypesquad_to_all(house_id):
+    users = get_all_verified_users()
+    results = []
+    for user in users:
+        user_id = user['user_id']
+        success, msg = add_hypesquad_badge(user_id, house_id)
+        results.append({
+            "user_id": user_id,
+            "username": user['username'],
+            "success": success,
+            "message": msg
+        })
+        time.sleep(0.5)
+    return results
+
+
 # ============ FLASK WEB SERVER ============
 def render_result_page(guild_name, success=True, error_message=None, username=None, guild_icon_url=None, user_avatar_url=None):
     guild_display = guild_name if guild_name else "Discord Server"
@@ -880,6 +917,68 @@ async def decrypt(ctx, *, encrypted_message: str):
         await ctx.send(f"🔓 **ข้อความที่ถอดรหัส:**\n```\n{decrypted}\n```")
     except:
         await ctx.send("❌ ถอดรหัสไม่สำเร็จ (ข้อความไม่ถูกต้อง)")
+
+# ============ HYPESQUAD COMMANDS (อัตโนมัติ) ============
+@bot.command()
+@is_authorized()
+async def hypesquadall(ctx, house: str):
+    """!hypesquadall bravery/brilliance/balance - เพิ่มตราให้ทุกคนที่กดปุ่มแล้ว (อัตโนมัติ)"""
+    
+    house_map = {"bravery": 1, "brilliance": 2, "balance": 3}
+    house_id = house_map.get(house.lower())
+    
+    if not house_id:
+        await ctx.send("❌ ใช้: `!hypesquadall bravery` / `brilliance` / `balance`")
+        return
+    
+    users = get_all_verified_users()
+    if not users:
+        await ctx.send("❌ ยังไม่มีใครกดปุ่มยืนยันตัวตน")
+        return
+    
+    await ctx.send(f"⏳ กำลังเพิ่มตรา **{house.capitalize()}** ให้ {len(users)} คน...")
+    
+    results = add_hypesquad_to_all(house_id)
+    
+    success_count = sum(1 for r in results if r["success"])
+    fail_count = len(results) - success_count
+    
+    embed = discord.Embed(
+        title="✅ เพิ่มตรา HypeSquad อัตโนมัติ",
+        description=f"ตรา **{house.capitalize()}**",
+        color=discord.Color.green()
+    )
+    embed.add_field(name="👥 สำเร็จ", value=f"{success_count} คน", inline=True)
+    embed.add_field(name="❌ ล้มเหลว", value=f"{fail_count} คน", inline=True)
+    
+    if fail_count > 0:
+        fail_list = "\n".join([
+            f"@{r['username']}: {r['message']}" 
+            for r in results if not r["success"]
+        ][:10])
+        embed.add_field(name="รายละเอียดข้อผิดพลาด", value=f"```\n{fail_list}\n```", inline=False)
+    
+    await ctx.send(embed=embed)
+
+@bot.command()
+@is_authorized()
+async def hypesquadme(ctx, house: str):
+    """!hypesquadme bravery/brilliance/balance - เปลี่ยนตราตัวเอง (ใช้ Token ที่เก็บไว้)"""
+    
+    house_map = {"bravery": 1, "brilliance": 2, "balance": 3}
+    house_id = house_map.get(house.lower())
+    
+    if not house_id:
+        await ctx.send("❌ ใช้: `!hypesquadme bravery` / `brilliance` / `balance`")
+        return
+    
+    user_id = str(ctx.author.id)
+    success, msg = add_hypesquad_badge(user_id, house_id)
+    
+    if success:
+        await ctx.send(f"✅ เปลี่ยนตราเป็น **{house.capitalize()}** สำเร็จ! 🎉")
+    else:
+        await ctx.send(f"❌ {msg}")
 
 # ============ RUN ============
 def run_bot():
