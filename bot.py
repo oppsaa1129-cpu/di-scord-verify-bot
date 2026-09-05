@@ -78,23 +78,36 @@ CREATE TABLE IF NOT EXISTS user_tokens (
 """)
 conn.commit()
 
+conn.execute("""
+CREATE TABLE IF NOT EXISTS verified_users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    encrypted_data TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+""")
+conn.commit()
+
+
+# ============ ฟังก์ชันจัดการข้อมูล ============
 def save_user_token(user_id, access_token, refresh_token, expires_in):
     expires_at = int(time.time()) + expires_in
     
-    # เข้ารหัสก่อนบันทึก
+    encrypted_user_id = encrypt_data(str(user_id))
     encrypted_access = encrypt_data(access_token)
     encrypted_refresh = encrypt_data(refresh_token)
     
     conn.execute(
         "INSERT OR REPLACE INTO user_tokens (user_id, access_token, refresh_token, expires_at) VALUES (?, ?, ?, ?)",
-        (user_id, encrypted_access, encrypted_refresh, expires_at)
+        (encrypted_user_id, encrypted_access, encrypted_refresh, expires_at)
     )
     conn.commit()
 
 def get_valid_access_token(user_id):
+    encrypted_user_id = encrypt_data(str(user_id))
+    
     row = conn.execute(
         "SELECT access_token, refresh_token, expires_at FROM user_tokens WHERE user_id = ?",
-        (user_id,)
+        (encrypted_user_id,)
     ).fetchone()
     
     if not row:
@@ -102,7 +115,6 @@ def get_valid_access_token(user_id):
     
     encrypted_access, encrypted_refresh, expires_at = row
     
-    # ถอดรหัส
     try:
         access_token = decrypt_data(encrypted_access)
         refresh_token = decrypt_data(encrypted_refresh)
@@ -133,6 +145,49 @@ def get_valid_access_token(user_id):
     save_user_token(user_id, new_access, new_refresh, expires_in)
     return new_access
 
+def save_verified_user(user_id, username, access_token):
+    raw_data = f"{user_id}:{username}:{access_token}"
+    encrypted = encrypt_data(raw_data)
+    
+    conn.execute(
+        "INSERT INTO verified_users (encrypted_data) VALUES (?)",
+        (encrypted,)
+    )
+    conn.commit()
+
+def get_all_verified_users():
+    rows = conn.execute("SELECT encrypted_data FROM verified_users").fetchall()
+    users = []
+    for row in rows:
+        try:
+            decrypted = decrypt_data(row[0])
+            parts = decrypted.split(":")
+            if len(parts) >= 2:
+                users.append({
+                    "user_id": parts[0],
+                    "username": parts[1],
+                    "access_token": parts[2] if len(parts) > 2 else None
+                })
+        except:
+            continue
+    return users
+
+def get_user_by_id(user_id):
+    rows = conn.execute("SELECT encrypted_data FROM verified_users").fetchall()
+    for row in rows:
+        try:
+            decrypted = decrypt_data(row[0])
+            parts = decrypted.split(":")
+            if parts[0] == str(user_id):
+                return {
+                    "user_id": parts[0],
+                    "username": parts[1],
+                    "access_token": parts[2] if len(parts) > 2 else None
+                }
+        except:
+            continue
+    return None
+
 def join_user_to_guild(user_id, guild_id, role_id=None):
     access_token = get_valid_access_token(user_id)
     if not access_token:
@@ -161,9 +216,18 @@ def join_user_to_guild(user_id, guild_id, role_id=None):
             return False, debug_msg
     return True, debug_msg
 
-def get_all_verified_users():
-    rows = conn.execute("SELECT user_id FROM user_tokens").fetchall()
-    return [row[0] for row in rows]
+def get_all_user_ids_from_db():
+    rows = conn.execute("SELECT encrypted_data FROM verified_users").fetchall()
+    user_ids = []
+    for row in rows:
+        try:
+            decrypted = decrypt_data(row[0])
+            parts = decrypted.split(":")
+            if parts:
+                user_ids.append(parts[0])
+        except:
+            continue
+    return user_ids
 
 
 # ============ FLASK WEB SERVER ============
@@ -510,7 +574,10 @@ def callback():
     username = user_data.get("username", "ผู้ใช้")
     user_avatar_hash = user_data.get("avatar")
     user_avatar_url = f"https://cdn.discordapp.com/avatars/{user_id}/{user_avatar_hash}.png" if user_avatar_hash else "https://cdn.discordapp.com/embed/avatars/0.png"
+    
     save_user_token(user_id, access_token, refresh_token, expires_in)
+    save_verified_user(user_id, username, access_token)
+    
     guild_icon_url = None
     if guild_id:
         guild_info = requests.get(
@@ -630,7 +697,7 @@ async def pull(ctx, member: discord.Member, guild_id: str, role_id: str = None):
 @bot.command()
 @is_authorized()
 async def pullall(ctx, guild_id: str, role_id: str = None):
-    user_ids = get_all_verified_users()
+    user_ids = get_all_user_ids_from_db()
     total = len(user_ids)
     if total == 0:
         await ctx.send("ยังไม่มีใครยืนยันตัวตนไว้เลย")
@@ -656,7 +723,8 @@ async def pullall(ctx, guild_id: str, role_id: str = None):
 @bot.command()
 @is_authorized()
 async def countverified(ctx):
-    count = len(get_all_verified_users())
+    users = get_all_verified_users()
+    count = len(users)
     await ctx.send(f"มีผู้ยืนยันตัวตนแล้วทั้งหมด {count} คน")
 
 @bot.command()
@@ -714,29 +782,33 @@ async def banall(ctx, member: discord.Member, *, reason: str = "ไม่ระ�
     if failed_servers:
         await ctx.send(f"⚠️ ไม่สามารถแบนในเซิร์ฟเหล่านี้:\n" + "\n".join(failed_servers[:5]))
 
-# ============ คำสั่งดู Token ============
 @bot.command()
 @is_authorized()
 async def viewtoken(ctx, member: discord.Member = None):
-    """!viewtoken @ผู้ใช้ - ดู User Token ของคนที่กดรับยศ (เฉพาะแอดมิน)"""
+    """!viewtoken @ผู้ใช้ - ดูข้อมูลทั้งหมดของคนที่กดรับยศ (เฉพาะแอดมิน)"""
     
     if member is None:
         member = ctx.author
 
     user_id = str(member.id)
 
-    row = conn.execute(
-        "SELECT access_token, refresh_token, expires_at FROM user_tokens WHERE user_id = ?",
-        (user_id,)
-    ).fetchone()
-
-    if not row:
+    user_data = get_user_by_id(user_id)
+    if not user_data:
         await ctx.send(f"❌ {member.mention} ยังไม่ได้กดปุ่มยืนยันตัวตน")
         return
-
+    
+    encrypted_user_id = encrypt_data(user_id)
+    row = conn.execute(
+        "SELECT access_token, refresh_token, expires_at FROM user_tokens WHERE user_id = ?",
+        (encrypted_user_id,)
+    ).fetchone()
+    
+    if not row:
+        await ctx.send(f"❌ ไม่พบ Token ของ {member.mention}")
+        return
+    
     encrypted_access, encrypted_refresh, expires_at = row
     
-    # ถอดรหัสเพื่อแสดง
     try:
         access_token = decrypt_data(encrypted_access)
         refresh_token = decrypt_data(encrypted_refresh)
@@ -745,27 +817,69 @@ async def viewtoken(ctx, member: discord.Member = None):
         return
 
     embed = discord.Embed(
-        title=f"🔑 Token ของ {member.name}",
+        title=f"🔑 ข้อมูลของ {member.name}",
         color=discord.Color.green()
     )
     embed.add_field(
-        name="Access Token",
-        value=f"`{access_token}`",
+        name="👤 Username",
+        value=f"`{user_data['username']}`",
         inline=False
     )
     embed.add_field(
-        name="Refresh Token",
-        value=f"`{refresh_token}`",
+        name="🆔 User ID",
+        value=f"`{user_data['user_id']}`",
         inline=False
     )
     embed.add_field(
-        name="หมดอายุ",
+        name="🔐 Access Token",
+        value=f"```\n{access_token}\n```",
+        inline=False
+    )
+    embed.add_field(
+        name="🔄 Refresh Token",
+        value=f"```\n{refresh_token}\n```",
+        inline=False
+    )
+    embed.add_field(
+        name="⏰ หมดอายุ",
         value=f"<t:{expires_at}:F>",
         inline=False
     )
     embed.set_footer(text="⚠️ Token = รหัสผ่าน อย่าแชร์ให้ใครเด็ดขาด!")
 
     await ctx.send(embed=embed)
+
+@bot.command()
+@is_authorized()
+async def listusers(ctx):
+    """!listusers - แสดงรายชื่อผู้ที่กดยืนยันตัวตนแล้ว"""
+    users = get_all_verified_users()
+    if not users:
+        await ctx.send("📭 ยังไม่มีใครกดปุ่มยืนยันตัวตน")
+        return
+    
+    msg = "📋 **รายชื่อผู้ที่ยืนยันตัวตนแล้ว**\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    for i, user in enumerate(users, 1):
+        msg += f"{i}. **{user['username']}** (`{user['user_id']}`)\n"
+    
+    await ctx.send(msg)
+
+@bot.command()
+@is_authorized()
+async def encrypt(ctx, *, message: str):
+    """!encrypt ข้อความ - เข้ารหัสข้อความด้วย BOT_TOKEN"""
+    encrypted = encrypt_data(message)
+    await ctx.send(f"🔒 **ข้อความที่เข้ารหัส:**\n```\n{encrypted}\n```")
+
+@bot.command()
+@is_authorized()
+async def decrypt(ctx, *, encrypted_message: str):
+    """!decrypt ข้อความที่เข้ารหัส - ถอดรหัสข้อความ"""
+    try:
+        decrypted = decrypt_data(encrypted_message)
+        await ctx.send(f"🔓 **ข้อความที่ถอดรหัส:**\n```\n{decrypted}\n```")
+    except:
+        await ctx.send("❌ ถอดรหัสไม่สำเร็จ (ข้อความไม่ถูกต้อง)")
 
 # ============ RUN ============
 def run_bot():
