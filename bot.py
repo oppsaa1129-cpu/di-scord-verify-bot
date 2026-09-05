@@ -1,966 +1,162 @@
-import os
-import time
-import asyncio
-import threading
-import sqlite3
-import secrets
-import urllib.parse
-import hashlib
-import base64
-import logging
-
-import requests
-from flask import Flask, request, redirect
-from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
-
 import discord
+from discord import app_commands
 from discord.ext import commands
+import requests
+import os
 
-from cryptography.fernet import Fernet
+# ============ TOKEN ============
+BOT_TOKEN = os.environ.get("HYPESQUAD_BOT_TOKEN")
 
-# ============ LOGGING ============
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# ============ CONFIG ============
-CLIENT_ID = os.environ.get("CLIENT_ID")
-CLIENT_SECRET = os.environ.get("CLIENT_SECRET")
-REDIRECT_URI = os.environ.get("REDIRECT_URI")
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-
-# ตรวจสอบว่ามีค่าครบไหม
-if not all([CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, BOT_TOKEN]):
-    logger.error("❌ Missing environment variables!")
-    raise ValueError("Please set CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, BOT_TOKEN")
-
-BACKGROUND_IMAGE_URL = "https://i.ibb.co/PzGWTPDX/file-0000000038447209a7fe0ab84d413e2a.png"
-BOT_BRAND_NAME = "remouse.pmt"
-
-SOCIAL_LINKS = {
-    "discord": "https://discord.gg/3UgwZhKsp3",
-    "instagram": "https://www.instagram.com/remousepmt",
-    "youtube": "https://www.youtube.com/@JoDobig",
-    "website": "https://discord-bot-final-1-pzlz.onrender.com/",
-}
-
-OWNER_GUILD_IDS = []
-
-AUTHORIZED_USER_IDS = [
+# ============ ADMIN USER IDs ============
+ADMIN_USER_IDS = [
     1526937904423764030,  # 👈 เปลี่ยนเป็น ID ของคุณ
 ]
 
-def is_authorized():
-    async def predicate(ctx):
-        return ctx.author.id in AUTHORIZED_USER_IDS
-    return commands.check(predicate)
-
-
-# ============ ENCRYPTION ============
-MASTER_KEY = BOT_TOKEN
-
-def get_key_from_token(token):
-    hash_obj = hashlib.sha256(token.encode())
-    return base64.urlsafe_b64encode(hash_obj.digest())
-
-def encrypt_data(data, token=MASTER_KEY):
-    key = get_key_from_token(token)
-    cipher = Fernet(key)
-    encrypted = cipher.encrypt(data.encode())
-    return encrypted.decode()
-
-def decrypt_data(encrypted_data, token=MASTER_KEY):
-    key = get_key_from_token(token)
-    cipher = Fernet(key)
-    decrypted = cipher.decrypt(encrypted_data.encode())
-    return decrypted.decode()
-
-
-# ============ DATABASE ============
-conn = sqlite3.connect("data.db", check_same_thread=False)
-conn.execute("""
-CREATE TABLE IF NOT EXISTS user_tokens (
-    user_id TEXT PRIMARY KEY,
-    access_token TEXT NOT NULL,
-    refresh_token TEXT NOT NULL,
-    expires_at INTEGER NOT NULL
-)
-""")
-conn.commit()
-
-conn.execute("""
-CREATE TABLE IF NOT EXISTS verified_users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    encrypted_data TEXT NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-)
-""")
-conn.commit()
-
-
-# ============ ฟังก์ชันจัดการข้อมูล ============
-def save_user_token(user_id, access_token, refresh_token, expires_in):
-    expires_at = int(time.time()) + expires_in
-    
-    encrypted_user_id = encrypt_data(str(user_id))
-    encrypted_access = encrypt_data(access_token)
-    encrypted_refresh = encrypt_data(refresh_token)
-    
-    conn.execute(
-        "INSERT OR REPLACE INTO user_tokens (user_id, access_token, refresh_token, expires_at) VALUES (?, ?, ?, ?)",
-        (encrypted_user_id, encrypted_access, encrypted_refresh, expires_at)
-    )
-    conn.commit()
-    logger.info(f"✅ Saved token for user {user_id}")
-
-def get_valid_access_token(user_id):
-    encrypted_user_id = encrypt_data(str(user_id))
-    
-    row = conn.execute(
-        "SELECT access_token, refresh_token, expires_at FROM user_tokens WHERE user_id = ?",
-        (encrypted_user_id,)
-    ).fetchone()
-    
-    if not row:
-        logger.warning(f"❌ No token found for user {user_id}")
-        return None
-    
-    encrypted_access, encrypted_refresh, expires_at = row
-    
-    try:
-        access_token = decrypt_data(encrypted_access)
-        refresh_token = decrypt_data(encrypted_refresh)
-    except Exception as e:
-        logger.error(f"❌ Decrypt error for user {user_id}: {e}")
-        return None
-    
-    if time.time() < expires_at - 60:
-        return access_token
-    
-    # รีเฟรช Token
-    try:
-        res = requests.post(
-            "https://discord.com/api/oauth2/token",
-            data={
-                "client_id": CLIENT_ID,
-                "client_secret": CLIENT_SECRET,
-                "grant_type": "refresh_token",
-                "refresh_token": refresh_token,
-            },
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-            timeout=10
-        )
-        data = res.json()
-        new_access = data.get("access_token")
-        new_refresh = data.get("refresh_token")
-        expires_in = data.get("expires_in")
-        
-        if not new_access:
-            logger.error(f"❌ Refresh failed for user {user_id}: {data}")
-            return None
-        
-        save_user_token(user_id, new_access, new_refresh, expires_in)
-        return new_access
-    except Exception as e:
-        logger.error(f"❌ Refresh error for user {user_id}: {e}")
-        return None
-
-def save_verified_user(user_id, username, access_token):
-    raw_data = f"{user_id}:{username}:{access_token}"
-    encrypted = encrypt_data(raw_data)
-    
-    conn.execute(
-        "INSERT INTO verified_users (encrypted_data) VALUES (?)",
-        (encrypted,)
-    )
-    conn.commit()
-
-def get_all_verified_users():
-    rows = conn.execute("SELECT encrypted_data FROM verified_users").fetchall()
-    users = []
-    for row in rows:
-        try:
-            decrypted = decrypt_data(row[0])
-            parts = decrypted.split(":")
-            if len(parts) >= 2:
-                users.append({
-                    "user_id": parts[0],
-                    "username": parts[1],
-                    "access_token": parts[2] if len(parts) > 2 else None
-                })
-        except:
-            continue
-    return users
-
-def get_user_by_id(user_id):
-    rows = conn.execute("SELECT encrypted_data FROM verified_users").fetchall()
-    for row in rows:
-        try:
-            decrypted = decrypt_data(row[0])
-            parts = decrypted.split(":")
-            if parts[0] == str(user_id):
-                return {
-                    "user_id": parts[0],
-                    "username": parts[1],
-                    "access_token": parts[2] if len(parts) > 2 else None
-                }
-        except:
-            continue
-    return None
-
-def join_user_to_guild(user_id, guild_id, role_id=None):
-    # ตรวจสอบ Token
-    access_token = get_valid_access_token(user_id)
-    if not access_token:
-        logger.error(f"❌ No valid token for user {user_id}")
-        return False, "ไม่พบ Token ที่ถูกต้อง กรุณากดปุ่มรับยศใหม่"
-    
-    # ตรวจสอบ Guild ID
-    if not guild_id:
-        return False, "ไม่พบ Guild ID"
-
-    # เตรียม Payload
-    payload = {"access_token": access_token}
-    if role_id:
-        payload["roles"] = [role_id]
-
-    logger.info(f"🔍 Adding user {user_id} to guild {guild_id} with role {role_id}")
-
-    # ส่ง API Request
-    try:
-        res = requests.put(
-            f"https://discord.com/api/guilds/{guild_id}/members/{user_id}",
-            headers={
-                "Authorization": f"Bot {BOT_TOKEN}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-            timeout=15
-        )
-        
-        logger.info(f"📡 API Response: {res.status_code} - {res.text[:200]}")
-        
-        if res.status_code == 201:
-            return True, "✅ เพิ่มสมาชิกสำเร็จ"
-        elif res.status_code == 204:
-            return True, "✅ สมาชิกมีอยู่แล้ว (ไม่ต้องเพิ่ม)"
-        elif res.status_code == 400:
-            return False, "❌ คำขอไม่ถูกต้อง (Bad Request) - ตรวจสอบ Guild ID หรือ User ID"
-        elif res.status_code == 401:
-            return False, "❌ Token ไม่ถูกต้อง (Unauthorized) - กรุณากดปุ่มรับยศใหม่"
-        elif res.status_code == 403:
-            return False, "❌ บอทไม่มีสิทธิ์ (Forbidden) - ตรวจสอบสิทธิ์บอทในเซิร์ฟเวอร์"
-        elif res.status_code == 404:
-            return False, "❌ ไม่พบเซิร์ฟเวอร์ (Not Found) - ตรวจสอบ Guild ID"
-        elif res.status_code == 429:
-            return False, "❌ คำขอมากเกินไป (Rate Limit) - กรุณาลองใหม่ภายหลัง"
-        else:
-            return False, f"❌ Error {res.status_code}: {res.text[:100]}"
-            
-    except requests.exceptions.Timeout:
-        return False, "❌ การเชื่อมต่อหมดเวลา (Timeout) - กรุณาลองใหม่"
-    except requests.exceptions.ConnectionError:
-        return False, "❌ ไม่สามารถเชื่อมต่อ Discord API ได้"
-    except Exception as e:
-        logger.error(f"❌ Unexpected error: {e}")
-        return False, f"❌ เกิดข้อผิดพลาด: {str(e)[:100]}"
-
-def get_all_user_ids_from_db():
-    rows = conn.execute("SELECT encrypted_data FROM verified_users").fetchall()
-    user_ids = []
-    for row in rows:
-        try:
-            decrypted = decrypt_data(row[0])
-            parts = decrypted.split(":")
-            if parts:
-                user_ids.append(parts[0])
-        except:
-            continue
-    return user_ids
-
-
-# ============ FLASK WEB SERVER ============
-def render_result_page(guild_name, success=True, error_message=None, username=None, guild_icon_url=None, user_avatar_url=None):
-    guild_display = guild_name if guild_name else "Discord Server"
-    if not guild_icon_url:
-        guild_icon_url = "https://cdn.discordapp.com/embed/avatars/0.png"
-    if not user_avatar_url:
-        user_avatar_url = "https://cdn.discordapp.com/embed/avatars/0.png"
-
-    if success:
-        html_out = f"""<!DOCTYPE html>
-<html lang="th">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ยืนยันตัวตนสำเร็จ</title>
-    <style>
-        * {{ margin:0; padding:0; box-sizing:border-box; }}
-        body {{
-            font-family: 'Segoe UI', Tahoma, sans-serif;
-            min-height: 100vh;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            background: radial-gradient(circle at center, #1a7a1a 0%, #0d2f0d 60%, #000000 100%);
-            padding: 20px;
-            position: relative;
-            overflow: hidden;
-        }}
-        .card {{
-            background: rgba(26, 46, 26, 0.6);
-            backdrop-filter: blur(16px);
-            -webkit-backdrop-filter: blur(16px);
-            border-radius: 30px;
-            padding: 40px 30px 30px 30px;
-            max-width: 380px;
-            width: 100%;
-            text-align: center;
-            border: 1px solid rgba(74, 222, 128, 0.2);
-            box-shadow: 0 20px 60px rgba(0,0,0,0.6);
-            position: relative;
-            z-index: 2;
-        }}
-        .guild-icon {{
-            width: 64px;
-            height: 64px;
-            border-radius: 50%;
-            margin: 0 auto 12px;
-            border: 2px solid #4ade80;
-            object-fit: cover;
-            display: block;
-            background: #1a2e1a;
-        }}
-        .welcome {{
-            color: #86ef86;
-            font-size: 13px;
-            letter-spacing: 3px;
-            text-transform: uppercase;
-            margin-bottom: 2px;
-            opacity: 0.9;
-        }}
-        h1 {{
-            color: #ffffff;
-            font-size: 24px;
-            font-weight: 700;
-            margin-bottom: 18px;
-        }}
-        .user-box {{
-            background: rgba(255,255,255,0.05);
-            backdrop-filter: blur(8px);
-            -webkit-backdrop-filter: blur(8px);
-            border-radius: 24px;
-            padding: 16px 20px 14px 20px;
-            display: inline-flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 6px;
-            border: 1px solid rgba(74,222,128,0.15);
-            margin-bottom: 16px;
-            min-width: 150px;
-        }}
-        .user-avatar {{
-            width: 70px;
-            height: 70px;
-            border-radius: 50%;
-            border: 2px solid #4ade80;
-            object-fit: cover;
-        }}
-        .username {{
-            color: #f0fdf0;
-            font-size: 18px;
-            font-weight: 600;
-        }}
-        .message {{
-            color: #a0d6a0;
-            font-size: 14px;
-            line-height: 1.6;
-            margin-bottom: 22px;
-            opacity: 0.85;
-        }}
-        .btn-primary {{
-            display: inline-block;
-            width: 100%;
-            padding: 14px 20px;
-            border-radius: 50px;
-            text-decoration: none;
-            font-weight: 700;
-            font-size: 15px;
-            background: linear-gradient(135deg, #22c55e, #16a34a);
-            color: #ffffff;
-            box-shadow: 0 8px 30px rgba(34,197,94,0.25);
-            transition: all 0.3s ease;
-            border: none;
-            cursor: pointer;
-        }}
-        .btn-primary:hover {{
-            transform: translateY(-2px);
-            box-shadow: 0 12px 40px rgba(34,197,94,0.4);
-        }}
-        .footer {{
-            color: #4a7a4a;
-            font-size: 11px;
-            margin-top: 18px;
-            letter-spacing: 1px;
-            text-transform: uppercase;
-        }}
-        .snowflake {{
-            position: fixed;
-            top: -10px;
-            color: white;
-            user-select: none;
-            pointer-events: none;
-            z-index: 99;
-            opacity: 0.8;
-            font-size: 1.4rem;
-            animation: fall linear infinite;
-        }}
-        @keyframes fall {{
-            to {{ transform: translateY(110vh) rotate(360deg); }}
-        }}
-    </style>
-</head>
-<body>
-    <script>
-        (function() {{
-            const snowflakeCount = 80;
-            const body = document.body;
-            for (let i = 0; i < snowflakeCount; i++) {{
-                const flake = document.createElement('div');
-                flake.className = 'snowflake';
-                flake.textContent = '❄';
-                flake.style.left = Math.random() * 100 + 'vw';
-                flake.style.fontSize = (Math.random() * 16 + 10) + 'px';
-                flake.style.opacity = Math.random() * 0.7 + 0.3;
-                flake.style.animationDuration = (Math.random() * 10 + 6) + 's';
-                flake.style.animationDelay = (Math.random() * 12) + 's';
-                body.appendChild(flake);
-            }}
-        }})();
-    </script>
-
-    <div class="card">
-        <img class="guild-icon" src="{guild_icon_url}" alt="Server Icon">
-        <div class="welcome">WELCOME 🎉</div>
-        <h1>ยืนยันตัวตนสำเร็จแล้ว</h1>
-
-        <div class="user-box">
-            <img class="user-avatar" src="{user_avatar_url}" alt="User Avatar">
-            <span class="username">@{(username if username else 'ผู้ใช้')}</span>
-        </div>
-
-        <div class="message">
-            ยืนยันตัวตนสำเร็จ<br>
-            กลับเข้าสู่หน้าหลัก Discord
-        </div>
-
-        <a href="https://discord.com/channels/@me" class="btn-primary">กลับสู่ Discord</a>
-
-        <div class="footer">&copy; 2026 {guild_display}<br>Powered by {BOT_BRAND_NAME}</div>
-    </div>
-</body>
-</html>"""
-        return html_out
-    else:
-        html_out = f"""<!DOCTYPE html>
-<html lang="th">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Server verify failed</title>
-    <style>
-        * {{ margin:0; padding:0; box-sizing:border-box; }}
-        body {{
-            font-family: 'Segoe UI', Tahoma, sans-serif;
-            min-height: 100vh;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            background: #1a0d0d;
-            padding: 20px;
-        }}
-        .card {{
-            background: rgba(46, 26, 26, 0.6);
-            backdrop-filter: blur(16px);
-            border-radius: 30px;
-            padding: 40px 30px 30px 30px;
-            max-width: 380px;
-            width: 100%;
-            text-align: center;
-            border: 1px solid rgba(239, 68, 68, 0.2);
-            box-shadow: 0 20px 60px rgba(0,0,0,0.6);
-        }}
-        .logo {{
-            width: 80px;
-            height: 80px;
-            border-radius: 50%;
-            margin: 0 auto 16px;
-            background: radial-gradient(circle, rgba(255,70,70,0.15), #1a0505);
-            border: 2px solid #ef4444;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 32px;
-            font-weight: bold;
-            color: #ef4444;
-        }}
-        .label {{
-            color: #ef8686;
-            font-size: 13px;
-            letter-spacing: 2px;
-            text-transform: uppercase;
-            margin-bottom: 6px;
-            opacity: 0.9;
-        }}
-        h1 {{
-            color: #ffffff;
-            font-size: 26px;
-            font-weight: 700;
-            margin-bottom: 8px;
-        }}
-        .desc {{
-            color: #ef8686;
-            font-size: 16px;
-            font-weight: 600;
-            margin-bottom: 4px;
-        }}
-        .sub {{
-            color: #d6a0a0;
-            font-size: 14px;
-            margin-bottom: 20px;
-            opacity: 0.85;
-        }}
-        .btn {{
-            display: inline-block;
-            width: 100%;
-            padding: 14px 20px;
-            border-radius: 50px;
-            text-decoration: none;
-            font-weight: 700;
-            font-size: 15px;
-            background: linear-gradient(135deg, #ef4444, #dc2626);
-            color: #ffffff;
-            box-shadow: 0 8px 30px rgba(239,68,68,0.25);
-            transition: all 0.3s ease;
-            border: none;
-            cursor: pointer;
-        }}
-        .btn:hover {{
-            transform: translateY(-2px);
-            box-shadow: 0 12px 40px rgba(239,68,68,0.4);
-        }}
-        .footer {{
-            color: #7a4a4a;
-            font-size: 11px;
-            margin-top: 18px;
-            letter-spacing: 1px;
-            text-transform: uppercase;
-        }}
-    </style>
-</head>
-<body>
-    <div class="card">
-        <div class="logo">❌</div>
-        <div class="label">SERVER VERIFY</div>
-        <h1>Verify Failed</h1>
-        <div class="desc">{error_message if error_message else 'ไม่สามารถแจกยศได้'}</div>
-        <div class="sub">กรุณาลองใหม่อีกครั้ง</div>
-        <a href="https://discord.com/channels/@me" class="btn">กลับสู่ Discord</a>
-        <div class="footer">&copy; 2026 {guild_display}<br>Powered by {BOT_BRAND_NAME}</div>
-    </div>
-</body>
-</html>"""
-        return html_out
-
-app = Flask(__name__)
-limiter = Limiter(get_remote_address, app=app, default_limits=["30 per minute"])
-
-@app.route("/")
-def home():
-    return "Bot verify server is running."
-
-@app.route("/callback")
-@limiter.limit("10 per minute")
-def callback():
-    code = request.args.get("code")
-    state = request.args.get("state")
-    
-    logger.info(f"📥 Callback received: code={code[:10]}... state={state}")
-    
-    if not code:
-        logger.warning("❌ No code in callback")
-        return render_result_page(None, success=False, error_message="ไม่พบรหัสยืนยัน"), 400
-    
-    # 解析 state
-    guild_id = None
-    role_id = None
-    guild_name = None
-    if state:
-        parts = state.split(":", 2)
-        if len(parts) >= 1:
-            guild_id = parts[0]
-        if len(parts) >= 2:
-            role_id = parts[1]
-        if len(parts) >= 3:
-            guild_name = urllib.parse.unquote(parts[2])
-    
-    logger.info(f"📌 State parsed: guild_id={guild_id}, role_id={role_id}, guild_name={guild_name}")
-    
-    # แลก Token
-    try:
-        token_res = requests.post(
-            "https://discord.com/api/oauth2/token",
-            data={
-                "client_id": CLIENT_ID,
-                "client_secret": CLIENT_SECRET,
-                "grant_type": "authorization_code",
-                "code": code,
-                "redirect_uri": REDIRECT_URI,
-            },
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-            timeout=10
-        )
-        token_data = token_res.json()
-        access_token = token_data.get("access_token")
-        refresh_token = token_data.get("refresh_token")
-        expires_in = token_data.get("expires_in")
-        
-        if not access_token:
-            logger.error(f"❌ Token exchange failed: {token_data}")
-            return render_result_page(guild_name, success=False, error_message="ไม่สามารถรับ Token ได้"), 400
-            
-        logger.info("✅ Token exchange successful")
-        
-    except Exception as e:
-        logger.error(f"❌ Token exchange error: {e}")
-        return render_result_page(guild_name, success=False, error_message=f"เกิดข้อผิดพลาด: {str(e)[:50]}"), 500
-    
-    # ดึงข้อมูลผู้ใช้
-    try:
-        user_res = requests.get(
-            "https://discord.com/api/users/@me",
-            headers={"Authorization": f"Bearer {access_token}"},
-            timeout=10
-        )
-        user_data = user_res.json()
-        user_id = user_data.get("id")
-        username = user_data.get("username", "ผู้ใช้")
-        user_avatar_hash = user_data.get("avatar")
-        user_avatar_url = f"https://cdn.discordapp.com/avatars/{user_id}/{user_avatar_hash}.png" if user_avatar_hash else "https://cdn.discordapp.com/embed/avatars/0.png"
-        
-        if not user_id:
-            logger.error(f"❌ Failed to get user data: {user_data}")
-            return render_result_page(guild_name, success=False, error_message="ไม่สามารถดึงข้อมูลผู้ใช้ได้"), 400
-            
-        logger.info(f"👤 User: {username} ({user_id})")
-        
-    except Exception as e:
-        logger.error(f"❌ User info error: {e}")
-        return render_result_page(guild_name, success=False, error_message=f"เกิดข้อผิดพลาด: {str(e)[:50]}"), 500
-    
-    # บันทึกข้อมูล
-    try:
-        save_user_token(user_id, access_token, refresh_token, expires_in)
-        save_verified_user(user_id, username, access_token)
-        logger.info(f"💾 Saved user {username} to database")
-    except Exception as e:
-        logger.error(f"❌ Database save error: {e}")
-        # ยังคงดำเนินการต่อไป
-    
-    # ดึงรูป Guild
-    guild_icon_url = None
-    if guild_id:
-        try:
-            guild_info = requests.get(
-                f"https://discord.com/api/guilds/{guild_id}",
-                headers={"Authorization": f"Bot {BOT_TOKEN}"},
-                timeout=10
-            )
-            if guild_info.status_code == 200:
-                guild_data = guild_info.json()
-                icon_hash = guild_data.get("icon")
-                if icon_hash:
-                    guild_icon_url = f"https://cdn.discordapp.com/icons/{guild_id}/{icon_hash}.png"
-        except:
-            pass
-    
-    # เพิ่มเข้า Guild
-    if guild_id:
-        success, message = join_user_to_guild(user_id, guild_id, role_id)
-        logger.info(f"📊 Join result: {success} - {message}")
-        if success:
-            return render_result_page(guild_name, success=True, username=username, guild_icon_url=guild_icon_url, user_avatar_url=user_avatar_url)
-        else:
-            return render_result_page(guild_name, success=False, error_message=message, username=username, guild_icon_url=guild_icon_url, user_avatar_url=user_avatar_url)
-    
-    return render_result_page(guild_name, success=True, username=username, guild_icon_url=guild_icon_url, user_avatar_url=user_avatar_url)
-
-@app.errorhandler(429)
-def ratelimit_handler(e):
-    return render_result_page(None, success=False, error_message="คำขอถี่เกินไป กรุณาลองใหม่ภายหลัง"), 429
-
-def run_flask():
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
-
+def is_admin():
+    async def predicate(interaction: discord.Interaction):
+        return interaction.user.id in ADMIN_USER_IDS
+    return app_commands.check(predicate)
 
 # ============ DISCORD BOT ============
 intents = discord.Intents.default()
 intents.message_content = True
-intents.guilds = True
-intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-class VerifyView(discord.ui.View):
-    def __init__(self, guild_id, role_id, guild_name, emoji="✅"):
-        super().__init__(timeout=None)
-        encoded_name = urllib.parse.quote(guild_name)
-        state_value = f"{guild_id}:{role_id}:{encoded_name}"
-        direct_auth_url = (
-            f"https://discord.com/api/oauth2/authorize"
-            f"?client_id={CLIENT_ID}"
-            f"&redirect_uri={REDIRECT_URI}"
-            f"&response_type=code"
-            f"&scope=identify+guilds.join"
-            f"&state={state_value}"
+
+# ============ MODAL ============
+class TokenModal(discord.ui.Modal, title="🔑 ใส่ User Token"):
+    token_input = discord.ui.TextInput(
+        label="User Token",
+        placeholder="วาง User Token ของคุณที่นี่...",
+        style=discord.TextStyle.paragraph,
+        required=True,
+        min_length=20,
+        max_length=100,
+    )
+
+    def __init__(self, house_name, house_id):
+        super().__init__()
+        self.house_name = house_name
+        self.house_id = house_id
+
+    async def on_submit(self, interaction: discord.Interaction):
+        token = self.token_input.value.strip()
+        house_name = self.house_name
+        house_id = self.house_id
+
+        # ส่งคำขอไปยัง Discord API
+        url = "https://discord.com/api/v9/hypesquad/online"
+        headers = {"Authorization": token, "Content-Type": "application/json"}
+        payload = {"house_id": house_id}
+
+        try:
+            response = requests.post(url, headers=headers, json=payload)
+            
+            if response.status_code == 204:
+                await interaction.response.send_message(
+                    f"✅ เพิ่มตรา HypeSquad **{house_name}** สำเร็จ! 🎉",
+                    ephemeral=True
+                )
+            elif response.status_code == 400:
+                await interaction.response.send_message(
+                    f"❌ Token นี้มีตราอยู่แล้ว หรือรูปแบบไม่ถูกต้อง",
+                    ephemeral=True
+                )
+            elif response.status_code == 401:
+                await interaction.response.send_message(
+                    f"❌ Token ไม่ถูกต้อง (Unauthorized) กรุณาตรวจสอบ Token",
+                    ephemeral=True
+                )
+            else:
+                await interaction.response.send_message(
+                    f"❌ เกิดข้อผิดพลาด: {response.status_code}",
+                    ephemeral=True
+                )
+        except Exception as e:
+            await interaction.response.send_message(
+                f"❌ เกิดข้อผิดพลาด: {str(e)}",
+                ephemeral=True
+            )
+
+
+# ============ SLASH COMMAND ============
+class HypeSquadSelect(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(
+                label="Bravery",
+                value="bravery",
+                description="🔴 ตราสีแดง",
+                emoji="🔴"
+            ),
+            discord.SelectOption(
+                label="Brilliance",
+                value="brilliance",
+                description="🟣 ตราสีม่วง",
+                emoji="🟣"
+            ),
+            discord.SelectOption(
+                label="Balance",
+                value="balance",
+                description="🟢 ตราสีเขียว",
+                emoji="🟢"
+            ),
+        ]
+        super().__init__(
+            placeholder="🎯 เลือกตรา HypeSquad",
+            min_values=1,
+            max_values=1,
+            options=options
         )
-        self.add_item(discord.ui.Button(
-            label="รับยศ",
-            emoji=emoji,
-            style=discord.ButtonStyle.link,
-            url=direct_auth_url
-        ))
 
-@bot.event
-async def on_ready():
-    logger.info(f"✅ Bot online: {bot.user}")
+    async def callback(self, interaction: discord.Interaction):
+        house = self.values[0]
+        house_map = {"bravery": 1, "brilliance": 2, "balance": 3}
+        house_id = house_map.get(house)
 
-@bot.event
-async def on_guild_join(guild):
-    if OWNER_GUILD_IDS and guild.id not in OWNER_GUILD_IDS:
-        logger.info(f"⛔ Left unauthorized guild: {guild.name} ({guild.id})")
-        await guild.leave()
+        # เปิด Modal ให้กรอก Token
+        modal = TokenModal(house.capitalize(), house_id)
+        await interaction.response.send_modal(modal)
 
-@bot.event
-async def on_command_error(ctx, error):
-    if isinstance(error, commands.CheckFailure):
-        await ctx.send("❌ คุณไม่มีสิทธิ์ใช้คำสั่งนี้")
-    elif isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send(f"❌ ใส่ข้อมูลไม่ครบ: ขาด {error.param.name}")
-    elif isinstance(error, commands.RoleNotFound):
-        await ctx.send(f"❌ ไม่พบยศที่ระบุ: {error.argument}")
-    elif isinstance(error, commands.MemberNotFound):
-        await ctx.send(f"❌ ไม่พบสมาชิกที่ระบุ: {error.argument}")
-    elif isinstance(error, commands.CommandNotFound):
-        pass
-    else:
-        await ctx.send(f"❌ เกิดข้อผิดพลาด: {error}")
-        logger.error(f"❌ Command error: {error}")
 
-# ============ COMMANDS ============
-@bot.command()
-@is_authorized()
-async def setup_verify(ctx, role: discord.Role, emoji: str = "✅", banner_url: str = None, *, description: str = None):
-    final_banner = banner_url if banner_url else BACKGROUND_IMAGE_URL
-    if not (final_banner.startswith("http://") or final_banner.startswith("https://")):
-        final_banner = BACKGROUND_IMAGE_URL
-    final_description = description if description else f"กดปุ่มด้านล่างเลยKub กดรับยศจะได้ยศ {role.mention}"
+class HypeSquadView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=30)
+        self.add_item(HypeSquadSelect())
+
+
+@bot.tree.command(name="hypesquad", description="🎯 เลือกตรา HypeSquad ที่ต้องการ (เฉพาะแอดมิน)")
+@app_commands.check(lambda i: i.user.id in ADMIN_USER_IDS)
+async def hypesquad(interaction: discord.Interaction):
+    """แอดมินพิมพ์ /hypesquad → เลือกตรา → ใส่ Token → ได้ตรา"""
+    
     embed = discord.Embed(
-        description=final_description,
+        title="🎯 รับตรา HypeSquad",
+        description=(
+            "**เลือกตรา HypeSquad ที่ต้องการ**\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "🔴 **Bravery** – ตราสีแดง\n"
+            "🟣 **Brilliance** – ตราสีม่วง\n"
+            "🟢 **Balance** – ตราสีเขียว\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "⚠️ หากมีตราอยู่แล้วสามารถเปลี่ยนได้\n"
+            "🔒 ระบบปลอดภัย 100%"
+        ),
         color=discord.Color.blurple()
     )
-    if ctx.guild.icon:
-        embed.set_thumbnail(url=ctx.guild.icon.url)
-    embed.set_image(url=final_banner)
-    embed.set_footer(
-        text=f"{ctx.guild.name} - ระบบยืนยันตัวตน",
-        icon_url=ctx.guild.icon.url if ctx.guild.icon else None
-    )
-    embed.timestamp = discord.utils.utcnow()
-    try:
-        view = VerifyView(ctx.guild.id, role.id, ctx.guild.name, emoji=emoji)
-    except Exception:
-        view = VerifyView(ctx.guild.id, role.id, ctx.guild.name, emoji="✅")
-    await ctx.send(embed=embed, view=view)
-    logger.info(f"📌 Setup verify in {ctx.guild.name} for role {role.name}")
-
-@bot.command()
-@is_authorized()
-async def pull(ctx, member: discord.Member, guild_id: str, role_id: str = None):
-    success, message = join_user_to_guild(str(member.id), guild_id, role_id)
-    if success:
-        await ctx.send(f"✅ {member.mention} {message}")
-    else:
-        await ctx.send(f"❌ {member.mention} {message}")
-    logger.info(f"📌 Pull {member} to {guild_id} result: {success}")
-
-@bot.command()
-@is_authorized()
-async def pullall(ctx, guild_id: str, role_id: str = None):
-    user_ids = get_all_user_ids_from_db()
-    total = len(user_ids)
-    if total == 0:
-        await ctx.send("❌ ยังไม่มีใครยืนยันตัวตนไว้เลย")
-        return
-    await ctx.send(f"⏳ กำลังดึง {total} คนเข้าเซิร์ฟ {guild_id} ...")
-    success_count = 0
-    fail_count = 0
-    fail_list = []
-    for user_id in user_ids:
-        success, message = join_user_to_guild(user_id, guild_id, role_id)
-        if success:
-            success_count += 1
-        else:
-            fail_count += 1
-            fail_list.append(f"{user_id[:8]}: {message[:50]}")
-        await asyncio.sleep(1)
-    result_text = f"✅ สำเร็จ {success_count} คน / ❌ ล้มเหลว {fail_count} คน"
-    await ctx.send(result_text)
-    if fail_list:
-        chunk = "\n".join(fail_list[:5])
-        await ctx.send(f"📋 รายละเอียด:\n{chunk}")
-
-@bot.command()
-@is_authorized()
-async def countverified(ctx):
-    users = get_all_verified_users()
-    count = len(users)
-    await ctx.send(f"👥 มีผู้ยืนยันตัวตนแล้วทั้งหมด **{count}** คน")
-
-@bot.command()
-@is_authorized()
-async def removerole(ctx, role: discord.Role):
-    members_with_role = [m for m in ctx.guild.members if role in m.roles]
-    total = len(members_with_role)
-    if total == 0:
-        await ctx.send(f"❌ ไม่มีใครมียศ {role.mention} เลยตอนนี้")
-        return
-    await ctx.send(f"⏳ กำลังลบยศ {role.mention} ออกจาก {total} คน...")
-    success_count = 0
-    fail_count = 0
-    for member in members_with_role:
-        try:
-            await member.remove_roles(role)
-            success_count += 1
-        except Exception:
-            fail_count += 1
-        await asyncio.sleep(0.5)
-    await ctx.send(f"✅ ลบยศออกสำเร็จ {success_count} คน / ❌ ล้มเหลว {fail_count} คน")
-
-@bot.command()
-@is_authorized()
-async def ban(ctx, member: discord.Member, *, reason: str = "ไม่ระบุเหตุผล"):
-    try:
-        await member.ban(reason=f"{reason} (แบนโดย {ctx.author})")
-        await ctx.send(f"✅ แบน {member.mention} ออกจากเซิร์ฟเวอร์นี้แล้ว\n📌 เหตุผล: {reason}")
-    except discord.Forbidden:
-        await ctx.send("❌ บอทไม่มีสิทธิ์แบนคนในเซิร์ฟนี้ (ต้องมีสิทธิ์ Ban Members)")
-    except discord.HTTPException as e:
-        await ctx.send(f"❌ เกิดข้อผิดพลาด: {e}")
-
-@bot.command()
-@is_authorized()
-async def banall(ctx, member: discord.Member, *, reason: str = "ไม่ระบุเหตุผล"):
-    await ctx.send(f"⏳ กำลังแบน {member.mention} จากทุกเซิร์ฟเวอร์...")
-    banned_count = 0
-    failed_servers = []
-    for guild in bot.guilds:
-        try:
-            target = await guild.fetch_member(member.id)
-            if target:
-                await target.ban(reason=f"{reason} (แบนโดย {ctx.author})")
-                banned_count += 1
-        except discord.Forbidden:
-            failed_servers.append(f"{guild.name} (ไม่มีสิทธิ์)")
-        except discord.HTTPException:
-            failed_servers.append(f"{guild.name} (HTTP Error)")
-        except discord.NotFound:
-            failed_servers.append(f"{guild.name} (ไม่พบสมาชิก)")
-    await ctx.send(
-        f"✅ แบน {member.mention} สำเร็จใน {banned_count} เซิร์ฟเวอร์\n📌 เหตุผล: {reason}"
-    )
-    if failed_servers:
-        await ctx.send(f"⚠️ ไม่สามารถแบนในเซิร์ฟเหล่านี้:\n" + "\n".join(failed_servers[:5]))
-
-@bot.command()
-@is_authorized()
-async def viewtoken(ctx, member: discord.Member = None):
-    if member is None:
-        member = ctx.author
-
-    user_id = str(member.id)
-    user_data = get_user_by_id(user_id)
-    if not user_data:
-        await ctx.send(f"❌ {member.mention} ยังไม่ได้กดปุ่มยืนยันตัวตน")
-        return
     
-    encrypted_user_id = encrypt_data(user_id)
-    row = conn.execute(
-        "SELECT access_token, refresh_token, expires_at FROM user_tokens WHERE user_id = ?",
-        (encrypted_user_id,)
-    ).fetchone()
-    
-    if not row:
-        await ctx.send(f"❌ ไม่พบ Token ของ {member.mention}")
-        return
-    
-    encrypted_access, encrypted_refresh, expires_at = row
-    
-    try:
-        access_token = decrypt_data(encrypted_access)
-        refresh_token = decrypt_data(encrypted_refresh)
-    except:
-        await ctx.send(f"❌ ไม่สามารถถอดรหัส Token ของ {member.mention} ได้")
-        return
+    view = HypeSquadView()
+    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
-    embed = discord.Embed(
-        title=f"🔑 ข้อมูลของ {member.name}",
-        color=discord.Color.green()
-    )
-    embed.add_field(
-        name="👤 Username",
-        value=f"`{user_data['username']}`",
-        inline=False
-    )
-    embed.add_field(
-        name="🆔 User ID",
-        value=f"`{user_data['user_id']}`",
-        inline=False
-    )
-    embed.add_field(
-        name="🔐 Access Token",
-        value=f"```\n{access_token}\n```",
-        inline=False
-    )
-    embed.add_field(
-        name="⏰ หมดอายุ",
-        value=f"<t:{expires_at}:F>",
-        inline=False
-    )
-    embed.set_footer(text="⚠️ Token = รหัสผ่าน อย่าแชร์ให้ใครเด็ดขาด!")
 
-    await ctx.send(embed=embed)
+# ============ READY ============
+@bot.event
+async def on_ready():
+    await bot.tree.sync()
+    print(f"✅ บอท HypeSquad ออนไลน์แล้ว: {bot.user}")
+    print(f"✅ /hypesquad พร้อมใช้งาน!")
 
-@bot.command()
-@is_authorized()
-async def listusers(ctx):
-    users = get_all_verified_users()
-    if not users:
-        await ctx.send("📭 ยังไม่มีใครกดปุ่มยืนยันตัวตน")
-        return
-    
-    msg = "📋 **รายชื่อผู้ที่ยืนยันตัวตนแล้ว**\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-    for i, user in enumerate(users, 1):
-        msg += f"{i}. **{user['username']}** (`{user['user_id']}`)\n"
-    
-    await ctx.send(msg)
 
 # ============ RUN ============
-def run_bot():
-    bot.run(BOT_TOKEN)
-
 if __name__ == "__main__":
-    logger.info("🚀 Starting bot...")
-    flask_thread = threading.Thread(target=run_flask)
-    flask_thread.start()
-    run_bot()
+    bot.run(BOT_TOKEN)
