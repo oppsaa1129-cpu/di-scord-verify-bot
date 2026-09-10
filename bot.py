@@ -55,6 +55,8 @@ def decrypt_data(encrypted_data, token=MASTER_KEY):
 
 # ============ DATABASE ============
 conn = sqlite3.connect("data.db", check_same_thread=False)
+
+# แก้ตาราง user_tokens ให้เก็บ user_id เป็นข้อความธรรมดา
 conn.execute("""
 CREATE TABLE IF NOT EXISTS user_tokens (
     user_id TEXT PRIMARY KEY,
@@ -65,9 +67,10 @@ CREATE TABLE IF NOT EXISTS user_tokens (
 """)
 conn.commit()
 
+# แก้ตาราง verified_users ให้เก็บ user_id เป็นข้อความธรรมดา
 conn.execute("""
 CREATE TABLE IF NOT EXISTS verified_users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT PRIMARY KEY,
     encrypted_data TEXT NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 )
@@ -76,50 +79,61 @@ conn.commit()
 
 def save_user_token(user_id, access_token, refresh_token, expires_in):
     expires_at = int(time.time()) + expires_in
+    # user_id เก็บธรรมดา, Token เข้ารหัส
     conn.execute(
         "INSERT OR REPLACE INTO user_tokens (user_id, access_token, refresh_token, expires_at) VALUES (?, ?, ?, ?)",
-        (encrypt_data(str(user_id)), encrypt_data(access_token), encrypt_data(refresh_token), expires_at)
+        (str(user_id), encrypt_data(access_token), encrypt_data(refresh_token), expires_at)
     )
     conn.commit()
 
 def get_valid_access_token(user_id):
+    # ค้นหาด้วย user_id ธรรมดา
     row = conn.execute(
         "SELECT access_token, refresh_token, expires_at FROM user_tokens WHERE user_id = ?",
-        (encrypt_data(str(user_id)),)
+        (str(user_id),)
     ).fetchone()
+    
     if not row:
         return None
+    
     enc_access, enc_refresh, expires_at = row
     try:
         access_token = decrypt_data(enc_access)
         refresh_token = decrypt_data(enc_refresh)
     except:
         return None
+    
     if time.time() < expires_at - 60:
         return access_token
+    
     # Refresh token
-    res = requests.post(
-        "https://discord.com/api/oauth2/token",
-        data={
-            "client_id": CLIENT_ID, "client_secret": CLIENT_SECRET,
-            "grant_type": "refresh_token", "refresh_token": refresh_token,
-        },
-        headers={"Content-Type": "application/x-www-form-urlencoded"}
-    )
-    data = res.json()
-    new_access = data.get("access_token")
-    if not new_access:
+    try:
+        res = requests.post(
+            "https://discord.com/api/oauth2/token",
+            data={
+                "client_id": CLIENT_ID, "client_secret": CLIENT_SECRET,
+                "grant_type": "refresh_token", "refresh_token": refresh_token,
+            },
+            headers={"Content-Type": "application/x-www-form-urlencoded"}, timeout=10
+        )
+        data = res.json()
+        new_access = data.get("access_token")
+        if not new_access:
+            return None
+        save_user_token(user_id, new_access, data.get("refresh_token"), data.get("expires_in"))
+        return new_access
+    except:
         return None
-    save_user_token(user_id, new_access, data.get("refresh_token"), data.get("expires_in"))
-    return new_access
 
 def join_user_to_guild(user_id, guild_id, role_id=None):
     access_token = get_valid_access_token(user_id)
     if not access_token:
         return False, "ไม่พบข้อมูลการยืนยันตัวตน หรือ Token หมดอายุ กรุณากดปุ่มใหม่"
+    
     payload = {"access_token": access_token}
     if role_id:
         payload["roles"] = [role_id]
+        
     try:
         res = requests.put(
             f"https://discord.com/api/guilds/{guild_id}/members/{user_id}",
@@ -136,6 +150,31 @@ def join_user_to_guild(user_id, guild_id, role_id=None):
             return False, f"❌ Error {res.status_code}: {res.text[:100]}"
     except Exception as e:
         return False, f"❌ เกิดข้อผิดพลาด: {str(e)[:50]}"
+
+def save_verified_user(user_id, username, access_token):
+    raw_data = f"{username}:{access_token}"
+    conn.execute(
+        "INSERT OR REPLACE INTO verified_users (user_id, encrypted_data) VALUES (?, ?)",
+        (str(user_id), encrypt_data(raw_data))
+    )
+    conn.commit()
+
+def get_all_verified_users():
+    rows = conn.execute("SELECT user_id, encrypted_data FROM verified_users").fetchall()
+    users = []
+    for row in rows:
+        try:
+            user_id, encrypted_data = row
+            decrypted = decrypt_data(encrypted_data)
+            parts = decrypted.split(":", 1)
+            users.append({
+                "user_id": user_id,
+                "username": parts[0],
+                "access_token": parts[1] if len(parts) > 1 else None
+            })
+        except:
+            continue
+    return users
 
 # ============ FLASK ============
 app = Flask(__name__)
@@ -190,15 +229,21 @@ def callback():
             "client_id": CLIENT_ID, "client_secret": CLIENT_SECRET, "grant_type": "authorization_code",
             "code": code, "redirect_uri": REDIRECT_URI,
         }, headers={"Content-Type": "application/x-www-form-urlencoded"}, timeout=10).json()
+        
         access_token = token_res.get("access_token")
         if not access_token:
             return render_page(False, "ไม่สามารถรับ Token ได้")
+            
         user_res = requests.get("https://discord.com/api/users/@me", headers={"Authorization": f"Bearer {access_token}"}, timeout=10).json()
         user_id = user_res["id"]
         username = user_res.get("username", "ผู้ใช้")
         avatar_hash = user_res.get("avatar")
         user_avatar = f"https://cdn.discordapp.com/avatars/{user_id}/{avatar_hash}.png" if avatar_hash else "https://cdn.discordapp.com/embed/avatars/0.png"
+        
+        # บันทึก Token และข้อมูลผู้ใช้
         save_user_token(user_id, access_token, token_res.get("refresh_token"), token_res.get("expires_in"))
+        save_verified_user(user_id, username, access_token)
+        
     except Exception as e:
         return render_page(False, f"เกิดข้อผิดพลาด: {str(e)[:50]}")
 
@@ -216,6 +261,7 @@ def callback():
             return render_page(True, username=username, guild_name=guild_name or "BONTEN COMMUNITY", guild_icon=guild_icon, user_avatar=user_avatar)
         else:
             return render_page(False, msg, username=username, guild_name=guild_name or "BONTEN COMMUNITY", guild_icon=guild_icon, user_avatar=user_avatar)
+    
     return render_page(True, username=username, guild_name=guild_name or "BONTEN COMMUNITY", guild_icon=guild_icon, user_avatar=user_avatar)
 
 def run_flask():
@@ -244,7 +290,6 @@ async def on_ready():
 @is_authorized()
 async def setup_verify(ctx, role: discord.Role, emoji: str = "✅", banner_url: str = None, *, description: str = None):
     """!setup_verify @ยศ [อิโมจิ] [ลิงก์รูป] [ข้อความ]"""
-    # ตรวจสอบว่าถ้าผู้ใช้ใส่ข้อความไทยมาแทนอิโมจิ ให้เปลี่ยนเป็นค่าเริ่มต้น
     if emoji and not emoji.startswith("<") and len(emoji) > 2 and not any(char in emoji for char in "✅🌟⭐🔥👑❤️🧡💛💚💙💜🖤🤍🤎🎉🎊✨💫"):
         if description is None:
             description = emoji
@@ -264,10 +309,9 @@ async def setup_verify(ctx, role: discord.Role, emoji: str = "✅", banner_url: 
     
     view = VerifyView(ctx.guild.id, role.id, ctx.guild.name, emoji=emoji)
     await ctx.send(embed=embed, view=view)
-    await ctx.message.delete() # ลบข้อความคำสั่งเพื่อความสะอาด
+    await ctx.message.delete()
 
-# ============ ระบบทำตรา HypeSquad (แบบ !) ============
-
+# ============ ระบบทำตรา HypeSquad ============
 class TokenModal(discord.ui.Modal, title="🔑 ใส่ User Token"):
     token_input = discord.ui.TextInput(
         label="User Token",
@@ -293,7 +337,7 @@ class TokenModal(discord.ui.Modal, title="🔑 ใส่ User Token"):
             if res.status_code == 204:
                 await interaction.response.send_message(f"✅ เพิ่มตรา **{self.house_name}** สำเร็จ! 🎉", ephemeral=True)
             elif res.status_code == 401:
-                await interaction.response.send_message("❌ Token ไม่ถูกต้อง (Unauthorized)", ephemeral=True)
+                await interaction.response.send_message("❌ Token ไม่ถูกต้อง (Unauthorized) กรุณาตรวจสอบ Token", ephemeral=True)
             else:
                 await interaction.response.send_message(f"❌ เกิดข้อผิดพลาด: {res.status_code}", ephemeral=True)
         except Exception as e:
